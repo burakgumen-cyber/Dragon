@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: tavuk-avi
+    name: avci-toynaklar
     runtime: node
     plan: free
     buildCommand: npm install
