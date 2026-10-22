@@ -40,6 +40,11 @@ canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:no
 .card input{width:100%;padding:11px 12px;border-radius:10px;border:2px solid #d8c9a8;font-size:16px;background:#fff}
 .live{font-size:13px;font-weight:700;margin:6px 0 2px;min-height:18px;color:#2a7a4b}
 .live.off{color:#7a6a55;font-weight:600}
+.recs{font-size:13px;line-height:1.55;margin:2px 0 6px}
+.recs .t{font-weight:800;margin-bottom:2px}
+.recs .r{display:flex;justify-content:space-between;gap:10px;padding:1px 0;border-bottom:1px dashed #eadfc8}
+.recs .r.me{font-weight:800;color:#c2410c}
+.recs .e{opacity:.7}
 .seg{display:flex;gap:8px;margin:12px 0}
 .seg button{flex:1;padding:10px;border-radius:10px;border:2px solid #d8c9a8;background:#fff;font-size:15px;font-weight:700;color:#3b2a1a;cursor:pointer}
 .seg button.on{border-color:#e76f51;background:#ffe8df}
@@ -71,6 +76,9 @@ canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:no
   <label for="nm">Adın</label><input id="nm" maxlength="14" placeholder="Avcı">
   <label for="rm">Oda adı (herkes “Toynaklar” odasına girer; farklı oda için başka ad yaz)</label><input id="rm" maxlength="20" placeholder="Toynaklar">
   <div id="live" class="live"></div>
+  <label>Av süresi <span style="font-weight:400;opacity:.7">(oda zaten açıksa odanın süresi geçerli)</span></label>
+  <div class="seg" id="dur" style="margin:4px 0 8px"><button data-v="60">1 dk</button><button data-v="120" class="on">2 dk</button><button data-v="180">3 dk</button><button data-v="300">5 dk</button></div>
+  <div id="recs" class="recs"></div>
   <label>Silah</label>
   <div class="seg" id="wp" style="margin-top:4px"><button data-v="rifle" class="on">🔫 Tüfek</button><button data-v="sling">🎯 Sapan (lastik)</button></div>
   <div class="seg" id="pos"><button data-v="window" class="on">🪟 Pencere</button><button data-v="trench">🪖 Siper</button></div>
@@ -81,6 +89,10 @@ canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:no
 <div id="end" class="ov hidden"><div class="card">
   <h1>🏆 Tur Bitti</h1>
   <div id="endList"></div>
+  <div id="endNew" class="live" style="margin-top:8px"></div>
+  <div id="endRec" class="recs"></div>
+  <label style="margin-top:10px">Sonraki tur süresi</label>
+  <div class="seg" id="endDur" style="margin:4px 0"><button data-v="60">1 dk</button><button data-v="120">2 dk</button><button data-v="180">3 dk</button><button data-v="300">5 dk</button></div>
   <p id="endT" style="margin-top:12px"></p>
   <button class="btn" id="share">🔗 Oda bağlantısını kopyala</button>
 </div></div>
@@ -89,7 +101,7 @@ canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:no
 (() => {
 'use strict';
 // ---------- Sabitler (sunucuyla aynı) ----------
-const W = 1600, H = 900, GY0 = 490, GY1 = 850;
+const W = 1600, H = 900, GY0 = 392, GY1 = 850;
 const COVERS = [
   { x: 560, y: 640, w: 150, h: 110, type: 'hay' },
   { x: 1380, y: 780, w: 170, h: 120, type: 'hay' },
@@ -97,6 +109,9 @@ const COVERS = [
   { x: 190, y: 790, w: 180, h: 100, type: 'bush' },
   { x: 1090, y: 710, w: 130, h: 120, type: 'well' },
   { x: 760, y: 830, w: 200, h: 110, type: 'cart' },
+  { x: 700, y: 455, w: 120, h: 68, type: 'bush' },
+  { x: 1010, y: 478, w: 108, h: 78, type: 'hay' },
+  { x: 250, y: 525, w: 110, h: 72, type: 'hay' },
 ];
 const STN = ['walk', 'run', 'idle', 'fly', 'hide', 'peek', 'dead', 'exit', 'tohide'];
 const TYN = ['normal', 'black', 'golden', 'rabbit'];
@@ -105,7 +120,7 @@ const WP = {
   rifle: { name: '🔫 Tüfek', mag: 6, gap: 360, reload: 1800 },
   sling: { name: '🎯 Sapan', mag: 10, gap: 340, reload: 900 },
 };
-const scale = y => 0.55 + (y - GY0) / (GY1 - GY0) * 0.65;
+const scale = y => 0.45 + (y - GY0) / (GY1 - GY0) * 0.75;
 
 const $ = id => document.getElementById(id);
 const cv = $('cv'), ctx = cv.getContext('2d');
@@ -119,6 +134,10 @@ let aim = { x: W / 2, y: H / 2 }, aimSent = { x: 0, y: 0 };
 let recoil = 0, flash = 0, shake = 0;
 let weapon = 'rifle', gunA = -1.2, bolt = 1, pull = 1, swap = 1, muz = { x: W * 0.62, y: H - 160 }, nextCluck = 0, nextPanic = 0;
 let fdt = 0.016, lastSwitch = 0, reloadDur = 1300;
+let roundSel = 120, roundNow = 120, scoresData = null;   // seçilen / odadaki tur süresi (sn), sunucudaki rekorlar
+try { const v = +localStorage.getItem('ta_round'); if ([60, 120, 180, 300].includes(v)) roundSel = v; } catch (e) {}
+const loadPB = () => { try { return JSON.parse(localStorage.getItem('ta_pb')) || {}; } catch (e) { return {}; } };   // kişisel rekorlar (süreye göre)
+function savePB(dur, score) { try { const pb = loadPB(); if (score > (pb[dur] || 0)) { pb[dur] = score; localStorage.setItem('ta_pb', JSON.stringify(pb)); } } catch (e) {} }
 const fparts = [], hopT = new Map();
 try { if (WP[localStorage.getItem('ta_weapon')]) weapon = localStorage.getItem('ta_weapon'); } catch (e) {}
 const parts = [];
@@ -263,184 +282,207 @@ const bg = document.createElement('canvas'); bg.width = W; bg.height = H;
   const rad = (x, y, r0, r1, stops) => { const q = g.createRadialGradient(x, y, r0, x, y, r1); stops.forEach(([o, c]) => q.addColorStop(o, c)); return q; };
   const ell = (x, y, rx, ry, fill) => { g.fillStyle = fill; g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, 7); g.fill(); };
   const pick = a => a[(R() * a.length) | 0];
+  // Uzak sahne (dağlar, tepeler, çit, binalar) K kadar küçültülüp ufuk çizgisine (GL) oturtulur; böylece gökyüzü küçülür, av alanı büyür.
+  const K = 0.78, GL = 385, X0 = -260, X1 = W + 260, DH = H - GL;
+  const far = fn => { g.save(); g.translate(W / 2, GL); g.scale(K, K); g.translate(-W / 2, -490); fn(); g.restore(); };
   // gökyüzü + güneş ışığı
-  g.fillStyle = lin(0, 0, 0, 460, [[0, '#3f8fd0'], [0.5, '#86c4e8'], [1, '#ecf3e6']]); g.fillRect(0, 0, W, 460);
-  g.fillStyle = rad(1360, 110, 0, 380, [[0, '#fffbe8ee'], [0.12, '#fff2b0aa'], [0.45, '#ffe9a025'], [1, '#ffe9a000']]); g.fillRect(0, 0, W, 460);
-  ell(1360, 110, 32, 32, '#fffef2');
-  // uzak dağlar (sisli)
-  g.fillStyle = lin(0, 300, 0, 440, [[0, '#9bb4cb'], [1, '#c3d3df']]); g.beginPath(); g.moveTo(0, 440);
-  for (let x = 0; x <= W; x += 16) g.lineTo(x, 345 - Math.abs(Math.sin(x / 230 + 0.8)) * 55 - Math.sin(x / 41) * 5 - Math.sin(x / 97) * 8);
-  g.lineTo(W, 440); g.fill();
-  // tepeler (ikincisinde tarla parçaları)
-  const hill = (base, amp, f, ph, c0, c1, y0, y1, extra) => {
-    g.beginPath(); g.moveTo(0, y1);
-    for (let x = 0; x <= W; x += 16) g.lineTo(x, base - Math.sin(x / f + ph) * amp - Math.sin(x / (f / 3.1) + ph * 2) * amp * 0.2);
-    g.lineTo(W, y1); g.closePath();
-    g.fillStyle = lin(0, y0, 0, y1, [[0, c0], [1, c1]]); g.fill();
-    if (extra) { g.save(); g.clip(); extra(); g.restore(); }
-  };
-  hill(395, 38, 260, 0, '#a3c58a', '#86b06c', 340, 470);
-  hill(425, 22, 180, 2, '#8cba68', '#6fa04e', 390, 480, () => {
-    for (let i = 0; i < 12; i++) {
-      const x = R() * W, w = 90 + R() * 160;
-      g.fillStyle = pick(['#d3c35e66', '#7fae4e88', '#b3c96477', '#5f9440aa', '#c9a95a55']);
-      g.beginPath(); g.moveTo(x, 405); g.lineTo(x + w, 405); g.lineTo(x + w + 40, 485); g.lineTo(x - 40, 485); g.fill();
-      g.strokeStyle = '#00000014'; g.lineWidth = 1;
-      for (let k = 0; k <= w; k += 10) { g.beginPath(); g.moveTo(x + k, 405); g.lineTo(x + k + (k / w - 0.5) * 80, 485); g.stroke(); }
+  g.fillStyle = lin(0, 0, 0, GL + 10, [[0, '#3f8fd0'], [0.55, '#86c4e8'], [1, '#ecf3e6']]); g.fillRect(0, 0, W, GL + 10);
+  g.fillStyle = rad(1360, 95, 0, 340, [[0, '#fffbe8ee'], [0.12, '#fff2b0aa'], [0.45, '#ffe9a025'], [1, '#ffe9a000']]); g.fillRect(0, 0, W, GL + 10);
+  ell(1360, 95, 30, 30, '#fffef2');
+  far(() => {
+    // uzak dağlar (sisli)
+    g.fillStyle = lin(0, 300, 0, 440, [[0, '#9bb4cb'], [1, '#c3d3df']]); g.beginPath(); g.moveTo(X0, 440);
+    for (let x = X0; x <= X1; x += 16) g.lineTo(x, 345 - Math.abs(Math.sin(x / 230 + 0.8)) * 55 - Math.sin(x / 41) * 5 - Math.sin(x / 97) * 8);
+    g.lineTo(X1, 440); g.fill();
+    // tepeler (ikincisinde tarla parçaları)
+    const hill = (base, amp, f, ph, c0, c1, y0, y1, extra) => {
+      g.beginPath(); g.moveTo(X0, y1);
+      for (let x = X0; x <= X1; x += 16) g.lineTo(x, base - Math.sin(x / f + ph) * amp - Math.sin(x / (f / 3.1) + ph * 2) * amp * 0.2);
+      g.lineTo(X1, y1); g.closePath();
+      g.fillStyle = lin(0, y0, 0, y1, [[0, c0], [1, c1]]); g.fill();
+      if (extra) { g.save(); g.clip(); extra(); g.restore(); }
+    };
+    hill(395, 38, 260, 0, '#a3c58a', '#86b06c', 340, 470);
+    hill(425, 22, 180, 2, '#8cba68', '#6fa04e', 390, 480, () => {
+      for (let i = 0; i < 14; i++) {
+        const x = X0 + R() * (X1 - X0), w = 90 + R() * 160;
+        g.fillStyle = pick(['#d3c35e66', '#7fae4e88', '#b3c96477', '#5f9440aa', '#c9a95a55']);
+        g.beginPath(); g.moveTo(x, 405); g.lineTo(x + w, 405); g.lineTo(x + w + 40, 485); g.lineTo(x - 40, 485); g.fill();
+        g.strokeStyle = '#00000014'; g.lineWidth = 1;
+        for (let k = 0; k <= w; k += 10) { g.beginPath(); g.moveTo(x + k, 405); g.lineTo(x + k + (k / w - 0.5) * 80, 485); g.stroke(); }
+      }
+    });
+    // uzak ağaç sırası
+    for (let i = 0; i < 56; i++) {
+      const x = X0 + R() * (X1 - X0), y = 418 + R() * 34, r = 12 + R() * 15;
+      ell(x + 4, y + r * 0.9, r * 1.1, r * 0.3, '#00000022');
+      g.fillStyle = '#4b7338'; g.beginPath(); g.arc(x, y, r, 0, 7); g.arc(x + r * 0.7, y + 4, r * 0.8, 0, 7); g.arc(x - r * 0.6, y + 5, r * 0.7, 0, 7); g.fill();
+      g.fillStyle = rad(x + r * 0.35, y - r * 0.4, 1, r, [[0, '#8fbf5ccc'], [1, '#8fbf5c00']]); g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
     }
+    // ufuk sisi
+    g.fillStyle = lin(0, 370, 0, 480, [[0, '#ffffff00'], [0.6, '#f4f9ee55'], [1, '#ffffff00']]); g.fillRect(X0, 370, X1 - X0, 110);
   });
-  // uzak ağaç sırası
-  for (let i = 0; i < 44; i++) {
-    const x = R() * W, y = 418 + R() * 34, r = 12 + R() * 15;
-    ell(x + 4, y + r * 0.9, r * 1.1, r * 0.3, '#00000022');
-    g.fillStyle = '#4b7338'; g.beginPath(); g.arc(x, y, r, 0, 7); g.arc(x + r * 0.7, y + 4, r * 0.8, 0, 7); g.arc(x - r * 0.6, y + 5, r * 0.7, 0, 7); g.fill();
-    g.fillStyle = rad(x + r * 0.35, y - r * 0.4, 1, r, [[0, '#8fbf5ccc'], [1, '#8fbf5c00']]); g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
-  }
-  // ufuk sisi
-  g.fillStyle = lin(0, 370, 0, 480, [[0, '#ffffff00'], [0.6, '#f4f9ee55'], [1, '#ffffff00']]); g.fillRect(0, 370, W, 110);
-  // çimen zemini + perspektifli biçme şeritleri
-  g.fillStyle = lin(0, 455, 0, H, [[0, '#86b84e'], [0.45, '#6ba03c'], [1, '#4a8228']]); g.fillRect(0, 455, W, H - 455);
-  for (let i = 0; i < 16; i++) {
-    const y0 = 462 + Math.pow(i / 16, 1.7) * 440, y1 = 462 + Math.pow((i + 1) / 16, 1.7) * 440;
+  // çimen zemini + perspektifli biçme şeritleri (ufuktan en alta kadar geniş av alanı)
+  g.fillStyle = lin(0, GL - 8, 0, H, [[0, '#86b84e'], [0.4, '#6ba03c'], [1, '#4a8228']]); g.fillRect(0, GL - 8, W, DH + 8);
+  for (let i = 0; i < 18; i++) {
+    const y0 = GL - 4 + Math.pow(i / 18, 1.7) * (DH + 6), y1 = GL - 4 + Math.pow((i + 1) / 18, 1.7) * (DH + 6);
     g.fillStyle = i % 2 ? '#ffffff0b' : '#0000000a'; g.fillRect(0, y0, W, y1 - y0);
   }
   // renk lekeleri ve çiğnenmiş toprak
-  for (let i = 0; i < 70; i++) {
-    const y = 480 + R() * 420, s = 0.5 + (y - 480) / 300;
+  for (let i = 0; i < 80; i++) {
+    const y = GL + 10 + R() * (DH - 10), s = 0.4 + (y - GL) / DH * 1.5;
     ell(R() * W, y, (60 + R() * 150) * s, (8 + R() * 16) * s, R() < 0.5 ? '#3f7a2022' : '#b9d96a22');
   }
-  ell(1270, 500, 170, 14, '#a98a5e44'); ell(330, 497, 150, 12, '#a98a5e44');
-  // toprak yol: renk geçişi, kenar, tekerlek izleri
-  g.fillStyle = lin(300, 0, 560, 0, [[0, '#bf9f72'], [1, '#d3b88c']]);
-  g.beginPath(); g.moveTo(300, 490); g.quadraticCurveTo(420, 640, 300, 900); g.lineTo(520, 900); g.quadraticCurveTo(560, 640, 370, 490); g.fill();
+  ell(433, 396, 110, 10, '#a98a5e44'); ell(1167, 396, 120, 10, '#a98a5e44');
+  // toprak yol: ahır kapısından öne doğru genişler
+  const qt = (a, b, c, t) => (1 - t) * (1 - t) * a + 2 * (1 - t) * t * b + t * t * c;
+  g.fillStyle = lin(330, 0, 600, 0, [[0, '#bf9f72'], [1, '#d3b88c']]);
+  g.beginPath(); g.moveTo(410, 386); g.quadraticCurveTo(520, 640, 340, 900); g.lineTo(590, 900); g.quadraticCurveTo(640, 640, 452, 386); g.fill();
   g.strokeStyle = '#7a5e3a55'; g.lineWidth = 3; g.stroke();
   g.strokeStyle = '#8d6d4455'; g.lineWidth = 7; g.lineCap = 'round';
-  g.beginPath(); g.moveTo(322, 495); g.quadraticCurveTo(450, 640, 350, 895); g.stroke();
-  g.beginPath(); g.moveTo(352, 495); g.quadraticCurveTo(535, 640, 470, 895); g.stroke();
+  g.beginPath(); g.moveTo(421, 392); g.quadraticCurveTo(550, 640, 402, 895); g.stroke();
+  g.beginPath(); g.moveTo(441, 392); g.quadraticCurveTo(610, 640, 527, 895); g.stroke();
   g.lineCap = 'butt';
-  const qt = (a, b, c, t) => (1 - t) * (1 - t) * a + 2 * (1 - t) * t * b + t * t * c;
-  for (let i = 0; i < 90; i++) {
-    const t = R(), y = qt(490, 640, 900, t), l = qt(300, 420, 300, t), r = qt(370, 560, 520, t), s = 0.5 + (y - 490) / 400;
+  for (let i = 0; i < 100; i++) {
+    const t = R(), y = qt(386, 640, 900, t), l = qt(410, 520, 340, t), r = qt(452, 640, 590, t), s = 0.4 + (y - GL) / DH * 1.3;
     ell(l + (r - l) * R(), y, (2 + R() * 4) * s, (1 + R() * 2) * s, R() < 0.5 ? '#8f7752aa' : '#ecdcbcaa');
   }
   g.strokeStyle = '#4f8a2e'; g.lineWidth = 2;
   for (let i = 0; i < 50; i++) {
-    const t = i / 50, x = qt(337, 495, 410, t) + (R() - 0.5) * 20, y = qt(490, 640, 900, t), s = 0.5 + (y - 490) / 400;
+    const t = i / 50, x = qt(431, 580, 465, t) + (R() - 0.5) * 18, y = qt(386, 640, 900, t), s = 0.4 + (y - GL) / DH * 1.3;
     g.beginPath(); g.moveTo(x, y); g.lineTo(x - 3 * s, y - 9 * s); g.moveTo(x, y); g.lineTo(x + 1, y - 11 * s); g.moveTo(x, y); g.lineTo(x + 4 * s, y - 8 * s); g.stroke();
   }
-  // çit (gölge, direkler, raylar)
-  for (let x = 10; x < W; x += 70) ell(x + 2, 489, 11, 3, '#0000002e');
-  for (let x = 10; x < W; x += 70) {
-    g.fillStyle = lin(x, 0, x + 8, 0, [[0, '#a2733f'], [1, '#5e4024']]); g.fillRect(x, 452, 8, 36);
-    g.fillStyle = '#b98650'; g.fillRect(x - 1, 450, 10, 3);
-  }
-  for (const yy of [462, 476]) {
-    g.fillStyle = lin(0, yy - 3, 0, yy + 3, [[0, '#b0804c'], [0.5, '#7a5530'], [1, '#4f3820']]); g.fillRect(0, yy - 3, W, 6);
-    g.fillStyle = '#00000030'; g.fillRect(0, yy + 3, W, 2);
-    g.strokeStyle = '#4f382055'; g.lineWidth = 1;
-    for (let x = 0; x < W; x += 30 + R() * 40) { g.beginPath(); g.moveTo(x, yy - 1 + R() * 2); g.lineTo(x + 14 + R() * 20, yy - 1 + R() * 2); g.stroke(); }
-  }
-  // ahır
-  const bx = 170, bw = 320, by = 485;
-  g.fillStyle = '#0000002e'; g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + bw, by); g.lineTo(bx + bw - 20, by + 30); g.lineTo(bx - 120, by + 30); g.fill();
-  g.fillStyle = lin(bx, 0, bx + bw, 0, [[0, '#9a2a24'], [0.55, '#b5322b'], [1, '#c8402f']]); g.fillRect(bx, by - 190, bw, 190);
-  for (let x = bx; x < bx + bw; x += 16) { g.fillStyle = R() < 0.5 ? '#00000014' : '#ffffff0d'; g.fillRect(x, by - 190, 16, 190); }
-  g.strokeStyle = '#6a1a1660'; g.lineWidth = 1;
-  for (let i = 0; i < 110; i++) { const x = bx + R() * bw, y = by - 190 + R() * 180; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (R() - 0.5) * 3, y + 8 + R() * 18); g.stroke(); }
-  g.strokeStyle = '#a0281f'; g.lineWidth = 2;
-  for (let x = bx + 16; x < bx + bw; x += 16) { g.beginPath(); g.moveTo(x, by - 190); g.lineTo(x, by); g.stroke(); }
-  g.fillStyle = lin(0, by - 50, 0, by, [[0, '#00000000'], [1, '#2a120a66']]); g.fillRect(bx, by - 50, bw, 50);
-  // çatı alınlığı (üçgen) + saçak
-  g.fillStyle = lin(0, by - 290, 0, by - 185, [[0, '#4a221a'], [1, '#6a3326']]); g.beginPath(); g.moveTo(bx - 18, by - 185); g.lineTo(bx + bw / 2, by - 290); g.lineTo(bx + bw + 18, by - 185); g.closePath(); g.fill();
-  g.save(); g.beginPath(); g.moveTo(bx, by - 190); g.lineTo(bx + bw / 2, by - 278); g.lineTo(bx + bw, by - 190); g.closePath();
-  g.fillStyle = lin(bx, 0, bx + bw, 0, [[0, '#9a2a24'], [0.6, '#b5322b'], [1, '#c8402f']]); g.fill(); g.clip();
-  g.strokeStyle = '#a0281f'; g.lineWidth = 2;
-  for (let x = bx + 8; x < bx + bw; x += 16) { g.beginPath(); g.moveTo(x, by - 300); g.lineTo(x, by - 188); g.stroke(); }
-  g.restore();
-  g.strokeStyle = '#2e140f'; g.lineWidth = 4; g.beginPath(); g.moveTo(bx - 18, by - 185); g.lineTo(bx + bw / 2, by - 290); g.lineTo(bx + bw + 18, by - 185); g.stroke();
-  g.strokeStyle = '#8a5240'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(bx - 14, by - 188); g.lineTo(bx + bw / 2, by - 285); g.lineTo(bx + bw + 14, by - 188); g.stroke();
-  g.strokeStyle = '#f1eee4'; g.lineWidth = 7; g.strokeRect(bx, by - 190, bw, 190);
-  g.strokeStyle = '#d7d2c4'; g.lineWidth = 1.5; g.strokeRect(bx + 3, by - 187, bw - 6, 184);
-  // ana kapı
-  g.fillStyle = lin(0, by - 120, 0, by, [[0, '#1c0e0a'], [1, '#3a1d14']]); g.fillRect(bx + bw / 2 - 60, by - 120, 120, 120);
-  g.strokeStyle = '#f1eee4'; g.lineWidth = 6; g.strokeRect(bx + bw / 2 - 60, by - 120, 120, 120);
-  g.beginPath(); g.moveTo(bx + bw / 2 - 60, by - 120); g.lineTo(bx + bw / 2 + 60, by); g.moveTo(bx + bw / 2 + 60, by - 120); g.lineTo(bx + bw / 2 - 60, by); g.lineWidth = 4; g.stroke();
-  g.fillStyle = '#5a5f66'; g.fillRect(bx + bw / 2 - 5, by - 64, 4, 10); g.fillRect(bx + bw / 2 + 1, by - 64, 4, 10);
-  // yan pencereler
-  for (const wx of [bx + 34, bx + bw - 84]) {
-    g.fillStyle = lin(wx, by - 118, wx + 50, by - 58, [[0, '#9cc4dc'], [1, '#2f4a5e']]); g.fillRect(wx, by - 118, 50, 60);
-    g.strokeStyle = '#f1eee4'; g.lineWidth = 5; g.strokeRect(wx, by - 118, 50, 60);
-    g.lineWidth = 3; g.beginPath(); g.moveTo(wx + 25, by - 118); g.lineTo(wx + 25, by - 58); g.moveTo(wx, by - 88); g.lineTo(wx + 50, by - 88); g.stroke();
-  }
-  // samanlık kapağı
-  g.fillStyle = '#1c0e0a'; g.fillRect(bx + bw / 2 - 26, by - 225, 52, 44); g.strokeStyle = '#f1eee4'; g.lineWidth = 5; g.strokeRect(bx + bw / 2 - 26, by - 225, 52, 44);
-  g.fillStyle = '#e8c35a'; g.fillRect(bx + bw / 2 - 22, by - 196, 44, 12);
-  g.strokeStyle = '#e0b84a'; g.lineWidth = 1; for (let i = 0; i < 10; i++) { g.beginPath(); g.moveTo(bx + bw / 2 - 22 + i * 5, by - 196); g.lineTo(bx + bw / 2 - 20 + i * 5, by - 186); g.stroke(); }
-  // silo (silindirik gölgelendirme)
-  g.fillStyle = '#0000002a'; g.beginPath(); g.moveTo(505, 485); g.lineTo(575, 485); g.lineTo(560, 505); g.lineTo(450, 505); g.fill();
-  g.fillStyle = lin(505, 0, 575, 0, [[0, '#7f858c'], [0.35, '#e4e7ea'], [0.65, '#c3c8cd'], [1, '#7b8188']]); g.fillRect(505, 245, 70, 240);
-  g.fillStyle = rad(528, 232, 2, 46, [[0, '#f4f6f8'], [1, '#7d838a']]); g.beginPath(); g.arc(540, 247, 36, Math.PI, 0); g.fill();
-  g.fillStyle = '#6a7077'; g.fillRect(536, 205, 8, 8);
-  g.strokeStyle = '#8a9097'; g.lineWidth = 2; for (let y = 275; y < 485; y += 26) { g.beginPath(); g.moveTo(505, y); g.lineTo(575, y); g.stroke(); }
-  g.strokeStyle = '#ffffff40'; g.lineWidth = 1; for (let y = 276; y < 485; y += 26) { g.beginPath(); g.moveTo(505, y); g.lineTo(575, y); g.stroke(); }
-  g.fillStyle = '#00000024'; g.fillRect(505, 460, 70, 25);
-  // kümes
-  const cx = 1180, cw = 180;
-  g.fillStyle = '#0000002e'; g.beginPath(); g.moveTo(cx, by); g.lineTo(cx + cw, by); g.lineTo(cx + cw - 10, by + 22); g.lineTo(cx - 90, by + 22); g.fill();
-  g.fillStyle = '#6a4724'; g.fillRect(cx + 10, by - 30, 10, 30); g.fillRect(cx + cw - 20, by - 30, 10, 30);
-  g.fillStyle = lin(cx, 0, cx + cw, 0, [[0, '#c68f4c'], [0.6, '#dba45e'], [1, '#e8b873']]); g.fillRect(cx, by - 140, cw, 112);
-  for (let x = cx; x < cx + cw; x += 15) { g.fillStyle = R() < 0.5 ? '#00000014' : '#ffffff10'; g.fillRect(x, by - 140, 15, 112); }
-  g.strokeStyle = '#b97f3e'; g.lineWidth = 2; for (let y = by - 130; y < by - 28; y += 14) { g.beginPath(); g.moveTo(cx, y); g.lineTo(cx + cw, y); g.stroke(); }
-  g.strokeStyle = '#7a4f2455'; g.lineWidth = 1; for (let i = 0; i < 40; i++) { const x = cx + R() * cw, y = by - 138 + R() * 108; g.beginPath(); g.moveTo(x, y); g.lineTo(x + 8 + R() * 14, y + (R() - 0.5) * 2); g.stroke(); }
-  g.save(); g.beginPath(); g.moveTo(cx - 14, by - 136); g.lineTo(cx + cw / 2, by - 200); g.lineTo(cx + cw + 14, by - 136); g.closePath(); g.fillStyle = '#6b3d1f'; g.fill(); g.clip();
-  for (let row = 0, y = by - 202; y < by - 132; row++, y += 8) {
-    for (let x = cx - 20 - (row % 2) * 7; x < cx + cw + 20; x += 14) { g.fillStyle = pick(['#7a4624', '#6b3d1f', '#5e3318', '#82502b']); g.fillRect(x, y, 13, 7); g.fillStyle = '#00000030'; g.fillRect(x, y + 6, 13, 1.5); }
-  }
-  g.restore();
-  g.strokeStyle = '#3e2210'; g.lineWidth = 3; g.beginPath(); g.moveTo(cx - 14, by - 136); g.lineTo(cx + cw / 2, by - 200); g.lineTo(cx + cw + 14, by - 136); g.stroke();
-  g.fillStyle = '#2b1712'; g.beginPath(); g.moveTo(cx + 70, by - 28); g.lineTo(cx + 70, by - 80); g.arc(cx + 90, by - 80, 20, Math.PI, 0); g.lineTo(cx + 110, by - 28); g.fill();
-  g.strokeStyle = '#8a5a2c'; g.lineWidth = 3; g.beginPath(); g.moveTo(cx + 70, by - 28); g.lineTo(cx + 70, by - 80); g.arc(cx + 90, by - 80, 20, Math.PI, 0); g.lineTo(cx + 110, by - 28); g.stroke();
-  g.fillStyle = '#a77b4a'; g.beginPath(); g.moveTo(cx + 70, by - 28); g.lineTo(cx + 110, by - 28); g.lineTo(cx + 125, by + 8); g.lineTo(cx + 60, by + 8); g.fill();
-  g.strokeStyle = '#6b4a28'; g.lineWidth = 2; for (let k = 1; k < 4; k++) { const t = k / 4; g.beginPath(); g.moveTo(cx + 70 - t * 10, by - 28 + t * 36); g.lineTo(cx + 110 + t * 15, by - 28 + t * 36); g.stroke(); }
-  g.fillStyle = '#6a4724'; g.fillRect(cx + cw, by - 108, 28, 34); g.fillStyle = '#7a4a26'; g.beginPath(); g.moveTo(cx + cw - 4, by - 108); g.lineTo(cx + cw + 14, by - 120); g.lineTo(cx + cw + 32, by - 108); g.fill();
-  g.fillStyle = '#2b1712'; g.fillRect(cx + cw + 6, by - 98, 16, 14);
-  g.fillStyle = '#4a2c14'; g.fillRect(cx + cw / 2 - 46, by - 122, 92, 24); g.strokeStyle = '#2b1710'; g.lineWidth = 2; g.strokeRect(cx + cw / 2 - 46, by - 122, 92, 24);
-  g.fillStyle = '#fff'; g.font = 'bold 18px sans-serif'; g.textAlign = 'center'; g.fillText('KÜMES', cx + cw / 2, by - 104);
-  // büyük ağaç
-  g.fillStyle = '#0000002e'; g.beginPath(); g.ellipse(1440, 490, 130, 14, 0, 0, 7); g.fill();
-  g.fillStyle = lin(1488, 0, 1522, 0, [[0, '#4e331c'], [0.5, '#8a6a43'], [1, '#5a3d23']]); g.fillRect(1490, 300, 30, 185);
-  g.beginPath(); g.moveTo(1490, 468); g.quadraticCurveTo(1480, 486, 1462, 492); g.lineTo(1548, 492); g.quadraticCurveTo(1530, 486, 1520, 468); g.fill();
-  g.strokeStyle = '#3a2412aa'; g.lineWidth = 2; for (let i = 0; i < 12; i++) { const x = 1493 + R() * 24; g.beginPath(); g.moveTo(x, 310 + R() * 60); g.lineTo(x + (R() - 0.5) * 6, 400 + R() * 80); g.stroke(); }
-  const blobs = [[1505, 260, 80], [1450, 300, 60], [1560, 300, 60], [1505, 320, 55], [1480, 225, 52], [1545, 235, 50], [1425, 265, 40]];
-  g.fillStyle = '#2b5a1f'; blobs.forEach(([x, y, r]) => { g.beginPath(); g.arc(x + 6, y + 8, r, 0, 7); g.fill(); });
-  g.fillStyle = '#3f7a2e'; blobs.forEach(([x, y, r]) => { g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); });
-  blobs.forEach(([x, y, r]) => { g.fillStyle = rad(x + r * 0.35, y - r * 0.4, 2, r * 1.05, [[0, '#a6dc6acc'], [1, '#a6dc6a00']]); g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); });
-  blobs.forEach(([x, y, r]) => {
-    for (let j = 0; j < 80; j++) {
-      const a = R() * 6.283, d = Math.sqrt(R()) * r * 0.95, px = x + Math.cos(a) * d, py = y + Math.sin(a) * d, lit = (Math.cos(a) * 0.5 - Math.sin(a) * 0.5 + 1) / 2;
-      g.fillStyle = lit > 0.62 ? pick(['#7ab94f', '#8dca5c']) : lit > 0.35 ? pick(['#3f7a2e', '#58963a']) : pick(['#2b5a1f', '#316a24']);
-      g.beginPath(); g.ellipse(px, py, 3 + R() * 5, 2 + R() * 3, R() * 3, 0, 7); g.fill();
+  far(() => {
+    // çit (gölge, direkler, raylar)
+    for (let x = X0; x < X1; x += 70) ell(x + 2, 489, 11, 3, '#0000002e');
+    for (let x = X0; x < X1; x += 70) {
+      g.fillStyle = lin(x, 0, x + 8, 0, [[0, '#a2733f'], [1, '#5e4024']]); g.fillRect(x, 452, 8, 36);
+      g.fillStyle = '#b98650'; g.fillRect(x - 1, 450, 10, 3);
     }
+    for (const yy of [462, 476]) {
+      g.fillStyle = lin(0, yy - 3, 0, yy + 3, [[0, '#b0804c'], [0.5, '#7a5530'], [1, '#4f3820']]); g.fillRect(X0, yy - 3, X1 - X0, 6);
+      g.fillStyle = '#00000030'; g.fillRect(X0, yy + 3, X1 - X0, 2);
+      g.strokeStyle = '#4f382055'; g.lineWidth = 1;
+      for (let x = X0; x < X1; x += 30 + R() * 40) { g.beginPath(); g.moveTo(x, yy - 1 + R() * 2); g.lineTo(x + 14 + R() * 20, yy - 1 + R() * 2); g.stroke(); }
+    }
+    // ahır
+    const bx = 170, bw = 320, by = 485;
+    g.fillStyle = '#0000002e'; g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + bw, by); g.lineTo(bx + bw - 20, by + 30); g.lineTo(bx - 120, by + 30); g.fill();
+    g.fillStyle = lin(bx, 0, bx + bw, 0, [[0, '#9a2a24'], [0.55, '#b5322b'], [1, '#c8402f']]); g.fillRect(bx, by - 190, bw, 190);
+    for (let x = bx; x < bx + bw; x += 16) { g.fillStyle = R() < 0.5 ? '#00000014' : '#ffffff0d'; g.fillRect(x, by - 190, 16, 190); }
+    g.strokeStyle = '#6a1a1660'; g.lineWidth = 1;
+    for (let i = 0; i < 110; i++) { const x = bx + R() * bw, y = by - 190 + R() * 180; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (R() - 0.5) * 3, y + 8 + R() * 18); g.stroke(); }
+    g.strokeStyle = '#a0281f'; g.lineWidth = 2;
+    for (let x = bx + 16; x < bx + bw; x += 16) { g.beginPath(); g.moveTo(x, by - 190); g.lineTo(x, by); g.stroke(); }
+    g.fillStyle = lin(0, by - 50, 0, by, [[0, '#00000000'], [1, '#2a120a66']]); g.fillRect(bx, by - 50, bw, 50);
+    // çatı alınlığı (üçgen) + saçak
+    g.fillStyle = lin(0, by - 290, 0, by - 185, [[0, '#4a221a'], [1, '#6a3326']]); g.beginPath(); g.moveTo(bx - 18, by - 185); g.lineTo(bx + bw / 2, by - 290); g.lineTo(bx + bw + 18, by - 185); g.closePath(); g.fill();
+    g.save(); g.beginPath(); g.moveTo(bx, by - 190); g.lineTo(bx + bw / 2, by - 278); g.lineTo(bx + bw, by - 190); g.closePath();
+    g.fillStyle = lin(bx, 0, bx + bw, 0, [[0, '#9a2a24'], [0.6, '#b5322b'], [1, '#c8402f']]); g.fill(); g.clip();
+    g.strokeStyle = '#a0281f'; g.lineWidth = 2;
+    for (let x = bx + 8; x < bx + bw; x += 16) { g.beginPath(); g.moveTo(x, by - 300); g.lineTo(x, by - 188); g.stroke(); }
+    g.restore();
+    g.strokeStyle = '#2e140f'; g.lineWidth = 4; g.beginPath(); g.moveTo(bx - 18, by - 185); g.lineTo(bx + bw / 2, by - 290); g.lineTo(bx + bw + 18, by - 185); g.stroke();
+    g.strokeStyle = '#8a5240'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(bx - 14, by - 188); g.lineTo(bx + bw / 2, by - 285); g.lineTo(bx + bw + 14, by - 188); g.stroke();
+    g.strokeStyle = '#f1eee4'; g.lineWidth = 7; g.strokeRect(bx, by - 190, bw, 190);
+    g.strokeStyle = '#d7d2c4'; g.lineWidth = 1.5; g.strokeRect(bx + 3, by - 187, bw - 6, 184);
+    // ana kapı
+    g.fillStyle = lin(0, by - 120, 0, by, [[0, '#1c0e0a'], [1, '#3a1d14']]); g.fillRect(bx + bw / 2 - 60, by - 120, 120, 120);
+    g.strokeStyle = '#f1eee4'; g.lineWidth = 6; g.strokeRect(bx + bw / 2 - 60, by - 120, 120, 120);
+    g.beginPath(); g.moveTo(bx + bw / 2 - 60, by - 120); g.lineTo(bx + bw / 2 + 60, by); g.moveTo(bx + bw / 2 + 60, by - 120); g.lineTo(bx + bw / 2 - 60, by); g.lineWidth = 4; g.stroke();
+    g.fillStyle = '#5a5f66'; g.fillRect(bx + bw / 2 - 5, by - 64, 4, 10); g.fillRect(bx + bw / 2 + 1, by - 64, 4, 10);
+    // yan pencereler
+    for (const wx of [bx + 34, bx + bw - 84]) {
+      g.fillStyle = lin(wx, by - 118, wx + 50, by - 58, [[0, '#9cc4dc'], [1, '#2f4a5e']]); g.fillRect(wx, by - 118, 50, 60);
+      g.strokeStyle = '#f1eee4'; g.lineWidth = 5; g.strokeRect(wx, by - 118, 50, 60);
+      g.lineWidth = 3; g.beginPath(); g.moveTo(wx + 25, by - 118); g.lineTo(wx + 25, by - 58); g.moveTo(wx, by - 88); g.lineTo(wx + 50, by - 88); g.stroke();
+    }
+    // samanlık kapağı
+    g.fillStyle = '#1c0e0a'; g.fillRect(bx + bw / 2 - 26, by - 225, 52, 44); g.strokeStyle = '#f1eee4'; g.lineWidth = 5; g.strokeRect(bx + bw / 2 - 26, by - 225, 52, 44);
+    g.fillStyle = '#e8c35a'; g.fillRect(bx + bw / 2 - 22, by - 196, 44, 12);
+    g.strokeStyle = '#e0b84a'; g.lineWidth = 1; for (let i = 0; i < 10; i++) { g.beginPath(); g.moveTo(bx + bw / 2 - 22 + i * 5, by - 196); g.lineTo(bx + bw / 2 - 20 + i * 5, by - 186); g.stroke(); }
+    // çatının üstünde tabela: "Gümen Toynaklar Çiftliği"
+    const tx = bx + bw / 2, tw = 450, th = 58, ty = by - 376;
+    for (const sg of [-1, 1]) {   // direkler çatı eğimine iner
+      g.fillStyle = lin(tx + sg * 150 - 5, 0, tx + sg * 150 + 5, 0, [[0, '#7a5530'], [1, '#3e2a16']]); g.fillRect(tx + sg * 150 - 5, ty + th - 2, 10, 120);
+    }
+    g.fillStyle = '#00000030'; g.fillRect(tx - tw / 2 + 6, ty + th, tw - 12, 7);
+    g.fillStyle = lin(0, ty, 0, ty + th, [[0, '#8a5a2c'], [0.5, '#6b4220'], [1, '#4a2c14']]); rrp(g, tx - tw / 2, ty, tw, th, 8); g.fill();
+    g.strokeStyle = '#2e1a0c'; g.lineWidth = 4; rrp(g, tx - tw / 2, ty, tw, th, 8); g.stroke();
+    g.strokeStyle = '#d9a75a'; g.lineWidth = 2; rrp(g, tx - tw / 2 + 6, ty + 6, tw - 12, th - 12, 5); g.stroke();
+    g.strokeStyle = '#3a22108c'; g.lineWidth = 1; for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(tx - tw / 2 + 8, ty + i * th / 4); g.lineTo(tx + tw / 2 - 8, ty + i * th / 4); g.stroke(); }
+    const txt = 'Gümen Toynaklar Çiftliği'; let fs = 34;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    do { g.font = `bold ${fs}px "Trebuchet MS", system-ui, sans-serif`; fs--; } while (g.measureText(txt).width > tw - 44 && fs > 14);
+    g.fillStyle = '#2a160a'; g.fillText(txt, tx + 2, ty + th / 2 + 3);
+    g.fillStyle = '#fff1c9'; g.fillText(txt, tx, ty + th / 2 + 1);
+    g.textBaseline = 'alphabetic';
+    // silo (silindirik gölgelendirme)
+    g.fillStyle = '#0000002a'; g.beginPath(); g.moveTo(505, 485); g.lineTo(575, 485); g.lineTo(560, 505); g.lineTo(450, 505); g.fill();
+    g.fillStyle = lin(505, 0, 575, 0, [[0, '#7f858c'], [0.35, '#e4e7ea'], [0.65, '#c3c8cd'], [1, '#7b8188']]); g.fillRect(505, 245, 70, 240);
+    g.fillStyle = rad(528, 232, 2, 46, [[0, '#f4f6f8'], [1, '#7d838a']]); g.beginPath(); g.arc(540, 247, 36, Math.PI, 0); g.fill();
+    g.fillStyle = '#6a7077'; g.fillRect(536, 205, 8, 8);
+    g.strokeStyle = '#8a9097'; g.lineWidth = 2; for (let y = 275; y < 485; y += 26) { g.beginPath(); g.moveTo(505, y); g.lineTo(575, y); g.stroke(); }
+    g.strokeStyle = '#ffffff40'; g.lineWidth = 1; for (let y = 276; y < 485; y += 26) { g.beginPath(); g.moveTo(505, y); g.lineTo(575, y); g.stroke(); }
+    g.fillStyle = '#00000024'; g.fillRect(505, 460, 70, 25);
+    // kümes
+    const cx = 1180, cw = 180;
+    g.fillStyle = '#0000002e'; g.beginPath(); g.moveTo(cx, by); g.lineTo(cx + cw, by); g.lineTo(cx + cw - 10, by + 22); g.lineTo(cx - 90, by + 22); g.fill();
+    g.fillStyle = '#6a4724'; g.fillRect(cx + 10, by - 30, 10, 30); g.fillRect(cx + cw - 20, by - 30, 10, 30);
+    g.fillStyle = lin(cx, 0, cx + cw, 0, [[0, '#c68f4c'], [0.6, '#dba45e'], [1, '#e8b873']]); g.fillRect(cx, by - 140, cw, 112);
+    for (let x = cx; x < cx + cw; x += 15) { g.fillStyle = R() < 0.5 ? '#00000014' : '#ffffff10'; g.fillRect(x, by - 140, 15, 112); }
+    g.strokeStyle = '#b97f3e'; g.lineWidth = 2; for (let y = by - 130; y < by - 28; y += 14) { g.beginPath(); g.moveTo(cx, y); g.lineTo(cx + cw, y); g.stroke(); }
+    g.strokeStyle = '#7a4f2455'; g.lineWidth = 1; for (let i = 0; i < 40; i++) { const x = cx + R() * cw, y = by - 138 + R() * 108; g.beginPath(); g.moveTo(x, y); g.lineTo(x + 8 + R() * 14, y + (R() - 0.5) * 2); g.stroke(); }
+    g.save(); g.beginPath(); g.moveTo(cx - 14, by - 136); g.lineTo(cx + cw / 2, by - 200); g.lineTo(cx + cw + 14, by - 136); g.closePath(); g.fillStyle = '#6b3d1f'; g.fill(); g.clip();
+    for (let row = 0, y = by - 202; y < by - 132; row++, y += 8) {
+      for (let x = cx - 20 - (row % 2) * 7; x < cx + cw + 20; x += 14) { g.fillStyle = pick(['#7a4624', '#6b3d1f', '#5e3318', '#82502b']); g.fillRect(x, y, 13, 7); g.fillStyle = '#00000030'; g.fillRect(x, y + 6, 13, 1.5); }
+    }
+    g.restore();
+    g.strokeStyle = '#3e2210'; g.lineWidth = 3; g.beginPath(); g.moveTo(cx - 14, by - 136); g.lineTo(cx + cw / 2, by - 200); g.lineTo(cx + cw + 14, by - 136); g.stroke();
+    g.fillStyle = '#2b1712'; g.beginPath(); g.moveTo(cx + 70, by - 28); g.lineTo(cx + 70, by - 80); g.arc(cx + 90, by - 80, 20, Math.PI, 0); g.lineTo(cx + 110, by - 28); g.fill();
+    g.strokeStyle = '#8a5a2c'; g.lineWidth = 3; g.beginPath(); g.moveTo(cx + 70, by - 28); g.lineTo(cx + 70, by - 80); g.arc(cx + 90, by - 80, 20, Math.PI, 0); g.lineTo(cx + 110, by - 28); g.stroke();
+    g.fillStyle = '#a77b4a'; g.beginPath(); g.moveTo(cx + 70, by - 28); g.lineTo(cx + 110, by - 28); g.lineTo(cx + 125, by + 8); g.lineTo(cx + 60, by + 8); g.fill();
+    g.strokeStyle = '#6b4a28'; g.lineWidth = 2; for (let k = 1; k < 4; k++) { const t = k / 4; g.beginPath(); g.moveTo(cx + 70 - t * 10, by - 28 + t * 36); g.lineTo(cx + 110 + t * 15, by - 28 + t * 36); g.stroke(); }
+    g.fillStyle = '#6a4724'; g.fillRect(cx + cw, by - 108, 28, 34); g.fillStyle = '#7a4a26'; g.beginPath(); g.moveTo(cx + cw - 4, by - 108); g.lineTo(cx + cw + 14, by - 120); g.lineTo(cx + cw + 32, by - 108); g.fill();
+    g.fillStyle = '#2b1712'; g.fillRect(cx + cw + 6, by - 98, 16, 14);
+    g.fillStyle = '#4a2c14'; g.fillRect(cx + cw / 2 - 46, by - 122, 92, 24); g.strokeStyle = '#2b1710'; g.lineWidth = 2; g.strokeRect(cx + cw / 2 - 46, by - 122, 92, 24);
+    g.fillStyle = '#fff'; g.font = 'bold 18px sans-serif'; g.textAlign = 'center'; g.fillText('KÜMES', cx + cw / 2, by - 104);
+    // büyük ağaç
+    g.fillStyle = '#0000002e'; g.beginPath(); g.ellipse(1440, 490, 130, 14, 0, 0, 7); g.fill();
+    g.fillStyle = lin(1488, 0, 1522, 0, [[0, '#4e331c'], [0.5, '#8a6a43'], [1, '#5a3d23']]); g.fillRect(1490, 300, 30, 185);
+    g.beginPath(); g.moveTo(1490, 468); g.quadraticCurveTo(1480, 486, 1462, 492); g.lineTo(1548, 492); g.quadraticCurveTo(1530, 486, 1520, 468); g.fill();
+    g.strokeStyle = '#3a2412aa'; g.lineWidth = 2; for (let i = 0; i < 12; i++) { const x = 1493 + R() * 24; g.beginPath(); g.moveTo(x, 310 + R() * 60); g.lineTo(x + (R() - 0.5) * 6, 400 + R() * 80); g.stroke(); }
+    const blobs = [[1505, 260, 80], [1450, 300, 60], [1560, 300, 60], [1505, 320, 55], [1480, 225, 52], [1545, 235, 50], [1425, 265, 40]];
+    g.fillStyle = '#2b5a1f'; blobs.forEach(([x, y, r]) => { g.beginPath(); g.arc(x + 6, y + 8, r, 0, 7); g.fill(); });
+    g.fillStyle = '#3f7a2e'; blobs.forEach(([x, y, r]) => { g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); });
+    blobs.forEach(([x, y, r]) => { g.fillStyle = rad(x + r * 0.35, y - r * 0.4, 2, r * 1.05, [[0, '#a6dc6acc'], [1, '#a6dc6a00']]); g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); });
+    blobs.forEach(([x, y, r]) => {
+      for (let j = 0; j < 80; j++) {
+        const a = R() * 6.283, d = Math.sqrt(R()) * r * 0.95, px = x + Math.cos(a) * d, py = y + Math.sin(a) * d, lit = (Math.cos(a) * 0.5 - Math.sin(a) * 0.5 + 1) / 2;
+        g.fillStyle = lit > 0.62 ? pick(['#7ab94f', '#8dca5c']) : lit > 0.35 ? pick(['#3f7a2e', '#58963a']) : pick(['#2b5a1f', '#316a24']);
+        g.beginPath(); g.ellipse(px, py, 3 + R() * 5, 2 + R() * 3, R() * 3, 0, 7); g.fill();
+      }
+    });
   });
   // çimen tutamları
   const gc = ['#3e7a24', '#4e8a2c', '#5f9c36', '#79b244', '#2f6a1e'];
-  for (let i = 0; i < 900; i++) {
-    const y = 495 + Math.pow(R(), 0.8) * 400, x = R() * W, s = 0.45 + (y - 490) / 380, hg = (8 + R() * 8) * s;
+  for (let i = 0; i < 1100; i++) {
+    const y = GL + 8 + Math.pow(R(), 0.8) * (DH - 12), x = R() * W, s = 0.35 + (y - GL) / DH * 1.3, hg = (8 + R() * 8) * s;
     g.strokeStyle = gc[(R() * gc.length) | 0]; g.lineWidth = 1.2 + s * 0.8;
     g.beginPath(); for (let k = -1; k <= 1; k++) { g.moveTo(x, y); g.quadraticCurveTo(x + k * 2 * s, y - hg * 0.6, x + k * 4 * s + (R() - 0.5) * 3, y - hg * (0.8 + R() * 0.3)); } g.stroke();
   }
   // yabani çiçekler
-  for (let i = 0; i < 110; i++) {
-    const y = 505 + R() * 380, x = R() * W, s = 0.5 + (y - 490) / 380;
-    if (x > 290 && x < 540) continue;
+  for (let i = 0; i < 130; i++) {
+    const y = GL + 14 + R() * (DH - 30), x = R() * W, s = 0.4 + (y - GL) / DH * 1.3;
+    if (x > 320 && x < 620) continue;
     g.strokeStyle = '#3e7a24'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y); g.lineTo(x, y - 9 * s); g.stroke();
     const c = pick(['#ffffff', '#ffd84a', '#f08ab0', '#c9a0ff']);
     g.fillStyle = c; for (let k = 0; k < 5; k++) { const a = k * 1.2566; g.beginPath(); g.arc(x + Math.cos(a) * 2.6 * s, y - 9 * s + Math.sin(a) * 2.6 * s, 2 * s, 0, 7); g.fill(); }
     g.fillStyle = c === '#ffd84a' ? '#e08a1a' : '#ffd84a'; g.beginPath(); g.arc(x, y - 9 * s, 1.5 * s, 0, 7); g.fill();
   }
   // taşlar
-  for (let i = 0; i < 34; i++) {
-    const y = 510 + R() * 370, x = R() * W, s = 0.5 + (y - 490) / 380;
+  for (let i = 0; i < 40; i++) {
+    const y = GL + 20 + R() * (DH - 30), x = R() * W, s = 0.4 + (y - GL) / DH * 1.3;
     ell(x + 1, y + 2 * s, 7 * s, 2.5 * s, '#00000030'); ell(x, y, 6 * s, 3.8 * s, pick(['#8d8f8a', '#9a9a92', '#777b76'])); ell(x - 1.5 * s, y - 1.2 * s, 3 * s, 1.5 * s, '#ffffff40');
   }
   // ışık, vinyet ve hafif film tanesi
@@ -449,7 +491,7 @@ const bg = document.createElement('canvas'); bg.width = W; bg.height = H;
   for (let i = 0; i < 9000; i++) { g.fillStyle = R() < 0.5 ? '#ffffff0c' : '#0000000c'; g.fillRect(R() * W, R() * H, 2, 2); }
 })();
 
-const clouds = Array.from({ length: 6 }, (_, i) => ({ x: i * 300 + Math.random() * 200, y: 50 + Math.random() * 140, s: 0.6 + Math.random() * 0.7, v: 6 + Math.random() * 10 }));
+const clouds = Array.from({ length: 6 }, (_, i) => ({ x: i * 300 + Math.random() * 200, y: 24 + Math.random() * 40, s: 0.5 + Math.random() * 0.55, v: 6 + Math.random() * 10 }));
 
 // ---------- Siperler / saklanma yerleri ----------
 function rrp(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
@@ -671,7 +713,7 @@ let reconnectT = null, wantName = '', wantRoom = '';
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws?room=${encodeURIComponent(wantRoom)}`);
-  ws.onopen = () => { $('conn').classList.add('hidden'); ws.send(JSON.stringify({ t: 'join', name: wantName, w: weapon })); };
+  ws.onopen = () => { $('conn').classList.add('hidden'); ws.send(JSON.stringify({ t: 'join', name: wantName, w: weapon, r: roundSel, pb: loadPB() })); };
   ws.onmessage = e => onMsg(JSON.parse(e.data));
   ws.onclose = () => {
     if (!playing) return;
@@ -684,8 +726,9 @@ function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
 function onMsg(m) {
   switch (m.t) {
     case 'welcome':
-      myId = m.id; myColor = m.color; mag = m.mag; ammo = m.ammo; phase = m.ph; timeLeft = m.tm;
+      myId = m.id; myColor = m.color; mag = m.mag; ammo = m.ammo; phase = m.ph; timeLeft = m.tm; roundNow = m.round || 120;
       snaps = []; off = null; drawAmmo(); break;
+    case 'round': roundNow = m.s; markEndDur(); feed(`⏱ Sonraki tur ${m.s / 60} dakika olacak`); break;
     case 'full': alert('Bu oda dolu (en fazla 8 avcı). Başka bir oda adı dene.'); location.reload(); break;
     case 's': {
       const nowT = performance.now() / 50, t = m.k - nowT;
@@ -704,7 +747,7 @@ function onMsg(m) {
       if (m.r) { reloadEnd = performance.now() + m.r; reloadDur = m.r; if (m.r > 600) sfxReload(weapon); }
       drawAmmo(); break;
     case 'fx': onFx(m); break;
-    case 'end': showEnd(m.b, m.tm); break;
+    case 'end': showEnd(m.b, m.tm, m); break;
     case 'start': $('end').classList.add('hidden'); setBoard(m.b); feed('🔔 Yeni tur başladı!'); break;
   }
 }
@@ -752,7 +795,26 @@ function drawAmmo() {
   for (let i = 0; i < mag; i++) { const s = document.createElement('div'); s.className = (weapon === 'sling' ? 'stone' : 'shell') + (i >= ammo || performance.now() < reloadEnd ? ' e' : ''); el.append(s); }
   const r = document.createElement('span'); r.id = 'rl'; el.append(r);
 }
-function showEnd(b, tm) {
+// Rekor listesi: en yüksek puan en üstte (yalnızca textContent: isimler güvenle yazılır)
+function renderRecs(el, list, dur, meName, title) {
+  el.textContent = '';
+  const t = document.createElement('div'); t.className = 't'; t.textContent = title || `🏆 Rekorlar · ${dur / 60} dakika`; el.append(t);
+  if (!list || !list.length) { const e = document.createElement('div'); e.className = 'e'; e.textContent = 'Henüz rekor yok, ilk rekoru sen kır!'; el.append(e); return; }
+  list.slice(0, 5).forEach((x, i) => {
+    const r = document.createElement('div'); r.className = 'r' + (x.n === meName ? ' me' : '');
+    const a = document.createElement('span'); a.textContent = `${['🥇', '🥈', '🥉'][i] || (i + 1) + '.'} ${x.n}`;
+    const s = document.createElement('span'); s.textContent = `${x.s} puan`;
+    r.append(a, s); el.append(r);
+  });
+}
+const markEndDur = () => [...$('endDur').children].forEach(x => x.classList.toggle('on', +x.dataset.v === roundNow));
+$('endDur').addEventListener('click', e => { const b = e.target.closest('button'); if (b) send({ t: 'round', s: +b.dataset.v }); });
+function showEnd(b, tm, m) {
+  const me = b.find(p => p.id === myId);
+  if (me) savePB(m.d, me.s);
+  roundNow = m.d; markEndDur();
+  renderRecs($('endRec'), m.rec, m.d, wantName);
+  const nn = $('endNew'); nn.className = 'live'; nn.textContent = m.nr && m.nr.length ? `🎉 Rekor listesine girenler: ${m.nr.join(', ')}` : '';
   const el = $('endList'); el.textContent = '';
   b.forEach((p, i) => {
     const r = document.createElement('div'); r.className = 'r';
@@ -831,13 +893,29 @@ function showLive() {
   const el = $('live'); if (!roomInfo) { el.textContent = ''; return; }
   const id = ($('rm').value.trim() || 'Toynaklar').toLowerCase(), r = roomInfo.rooms.find(x => x.id === id), n = r ? r.n : 0;
   el.className = 'live' + (n ? '' : ' off');
-  el.textContent = n >= roomInfo.max ? `🔴 Bu oda dolu (${n}/${roomInfo.max}), başka bir oda dene` : n ? `🟢 Şu an bu odada ${n} avcı oynuyor, sen de katıl!` : '⚪ Bu odada şu an kimse yok, ilk sen gir!';
+  el.textContent = n >= roomInfo.max ? `🔴 Bu oda dolu (${n}/${roomInfo.max}), başka bir oda dene` : n ? `🟢 Şu an bu odada ${n} avcı oynuyor (tur ${r.d / 60} dk), sen de katıl!` : '⚪ Bu odada şu an kimse yok, ilk sen gir!';
+  showRecs();
 }
+// lobide gösterilen rekorlar: oda açıksa odanın süresine, değilse seçilen süreye ait
+function effDur() {
+  const id = ($('rm').value.trim() || 'Toynaklar').toLowerCase(), r = roomInfo && roomInfo.rooms.find(x => x.id === id);
+  return r && r.n && r.d ? r.d : roundSel;
+}
+function showRecs() { if (scoresData) renderRecs($('recs'), scoresData.scores[effDur()], effDur(), $('nm').value.trim()); }
+const markDur = () => [...$('dur').children].forEach(x => x.classList.toggle('on', +x.dataset.v === roundSel));
+markDur();
+$('dur').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  roundSel = +b.dataset.v; markDur(); showRecs();
+  try { localStorage.setItem('ta_round', roundSel); } catch (e) {}
+});
 function pollRooms() {
   if (playing) return;
   fetch('/api/rooms', { cache: 'no-store' }).then(r => r.json()).then(j => { roomInfo = j; showLive(); }).catch(() => {});
+  fetch('/api/scores', { cache: 'no-store' }).then(r => r.json()).then(j => { scoresData = j; showRecs(); }).catch(() => {});
 }
 $('rm').addEventListener('input', showLive);
+$('nm').addEventListener('input', showRecs);
 pollRooms(); setInterval(pollRooms, 5000);
 const markWeapon = () => [...$('wp').children].forEach(x => x.classList.toggle('on', x.dataset.v === weapon));
 markWeapon();

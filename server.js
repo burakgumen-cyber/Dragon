@@ -10,11 +10,14 @@ const PUB = path.join(__dirname, 'public');
 const DEFAULT_ROOM = 'toynaklar';   // oda adı verilmezse herkes buraya girer
 
 // ---------- Dünya sabitleri (istemciyle aynı) ----------
-const W = 1600, H = 900, GY0 = 490, GY1 = 850;
+const W = 1600, H = 900, GY0 = 392, GY1 = 850;
 const TICK = 50;            // ms (20 Hz)
-const ROUND = 120;          // tur süresi (sn)
+const ROUNDS = [60, 120, 180, 300];   // seçilebilir tur süreleri (sn)
+const DEFAULT_ROUND = 120;
 const BREAK = 10;           // turlar arası (sn)
-const MAXCH = 14;           // aynı anda en fazla tavuk
+const MAXCH = 18;           // aynı anda en fazla tavuk
+const TOP_N = 10;           // her süre için saklanan rekor sayısı
+const SCORES_FILE = process.env.SCORES_FILE || path.join(__dirname, 'data', 'scores.json');
 const MAXP = 8;             // oda başına en fazla avcı
 // Silahlar (istemciyle aynı). gap: atışlar arası ms, rm: isabet alanı çarpanı, scare: atışın ürküttüğü yarıçap
 const WEAPONS = {
@@ -29,10 +32,14 @@ const COVERS = [
   { x: 190, y: 790, w: 180, h: 100, type: 'bush' },
   { x: 1090, y: 710, w: 130, h: 120, type: 'well' },
   { x: 760, y: 830, w: 200, h: 110, type: 'cart' },
+  { x: 700, y: 455, w: 120, h: 68, type: 'bush' },
+  { x: 1010, y: 478, w: 108, h: 78, type: 'hay' },
+  { x: 250, y: 525, w: 110, h: 72, type: 'hay' },
 ];
 const SPAWNS = [
-  { x: 330, y: 495 }, { x: 1270, y: 495 },              // ahır ve kümes kapısı
+  { x: 433, y: 394 }, { x: 1167, y: 394 },              // ahır ve kümes kapısı
   { x: -50, y: 620 }, { x: 1650, y: 700 }, { x: -50, y: 800 }, { x: 1650, y: 540 },
+  { x: -50, y: 450 }, { x: 1650, y: 440 },
 ];
 // r: isabet yarıçapı, cy: hedef merkezinin yerden yüksekliği
 const TYPES = {
@@ -45,20 +52,46 @@ const ST = { walk: 0, run: 1, idle: 2, fly: 3, hide: 4, peek: 5, dead: 6, exit: 
 const TY = { normal: 0, black: 1, golden: 2, rabbit: 3 };
 const COLORS = ['#e63946', '#2a9d8f', '#f4a261', '#4895ef', '#9b5de5', '#00bbf9', '#f15bb5', '#80b918'];
 
-const scale = y => 0.55 + (y - GY0) / (GY1 - GY0) * 0.65;
+const scale = y => 0.45 + (y - GY0) / (GY1 - GY0) * 0.75;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------- Rekorlar (süreye göre ayrı liste, en yüksek puan en üstte) ----------
+// Dosyaya yazılır; ücretsiz barındırmada dosya sıfırlanabilir, bu yüzden oyuncuların tarayıcıları
+// kendi rekorlarını katılırken tekrar gönderir ("pb") ve liste kendini toparlar.
+let scores = {};
+try { scores = JSON.parse(fs.readFileSync(SCORES_FILE, 'utf8')) || {}; } catch (e) { scores = {}; }
+function saveScores() {
+  try { fs.mkdirSync(path.dirname(SCORES_FILE), { recursive: true }); fs.writeFileSync(SCORES_FILE, JSON.stringify(scores)); } catch (e) {}
+}
+// true: bu oyuncunun rekoru yeni ya da yükseldi
+function submitScore(dur, name, score) {
+  score = Math.floor(+score);
+  if (!ROUNDS.includes(dur) || !(score > 0) || score > dur * 2.5 + 20) return false;   // makul olmayan puanları yok say
+  const list = scores[dur] || (scores[dur] = []);
+  const ex = list.find(e => e.n === name);
+  if (ex && score <= ex.s) return false;
+  if (ex) { ex.s = score; ex.t = Date.now(); } else list.push({ n: name, s: score, t: Date.now() });
+  list.sort((a, b) => b.s - a.s || a.t - b.t);
+  if (list.length > TOP_N) list.length = TOP_N;
+  saveScores();
+  return list.some(e => e.n === name && e.s === score);
+}
 
 // ---------- Statik dosyalar ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent(req.url.split('?')[0]);
   if (p === '/') p = '/index.html';
+  if (p === '/api/scores') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ rounds: ROUNDS, scores }));
+  }
   if (p === '/api/rooms') {   // lobide gösterilecek oda doluluğu: yalnızca sayı, isim yok
     const list = [...rooms.values()].map(r => ({ id: r.id, n: r.players.size }));
     if (!rooms.has(DEFAULT_ROOM)) list.unshift({ id: DEFAULT_ROOM, n: 0 });
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify({ def: DEFAULT_ROOM, max: MAXP, rooms: list }));
+    return res.end(JSON.stringify({ def: DEFAULT_ROOM, max: MAXP, rooms: list.map(r => ({ ...r, d: rooms.has(r.id) ? rooms.get(r.id).round : null })) }));
   }
   const f = path.join(PUB, path.normalize(p));
   if (!f.startsWith(PUB)) { res.writeHead(403); return res.end(); }
@@ -73,8 +106,9 @@ const server = http.createServer((req, res) => {
 const rooms = new Map();
 
 class Room {
-  constructor(id) {
+  constructor(id, round) {
     this.id = id;
+    this.round = ROUNDS.includes(round) ? round : DEFAULT_ROUND;   // tur süresi (sn); oda kurulurken seçilir, turlar arasında değiştirilebilir
     this.players = new Map();
     this.ch = [];
     this.nextId = 1;
@@ -82,7 +116,7 @@ class Room {
     this.tick = 0;
     this.hist = [];
     this.phase = 'play';
-    this.timer = ROUND;
+    this.timer = this.round;
     this.spawnT = 0;
     this.iv = setInterval(() => this.step(), TICK);
   }
@@ -97,7 +131,7 @@ class Room {
     const wp = WEAPONS[weapon] ? weapon : 'rifle';
     const p = { id: this.nextPid++, ws, name, color, score: 0, kills: 0, shots: 0, weapon: wp, ammo: WEAPONS[wp].mag, reloadUntil: 0, lastShot: 0, lastSwitch: 0, aim: { x: W / 2, y: H / 2 } };
     this.players.set(p.id, p);
-    this.send(p, { t: 'welcome', id: p.id, color, room: this.id, ph: this.phase, tm: Math.ceil(this.timer), ammo: p.ammo, mag: WEAPONS[wp].mag });
+    this.send(p, { t: 'welcome', id: p.id, color, room: this.id, ph: this.phase, tm: Math.ceil(this.timer), ammo: p.ammo, mag: WEAPONS[wp].mag, round: this.round });
     this.broadcast({ t: 'b', b: this.board(), msg: `${name} odaya katıldı` });
     return p;
   }
@@ -247,7 +281,7 @@ class Room {
         if (!s.hit) continue;
         const T = TYPES[s.ty] || TYPES.normal, sc = scale(s.y), cx = s.x, cy = s.y - s.z - T.cy * sc;
         const d = Math.hypot(x - cx, y - cy);
-        if (d < T.r * wp.rm * sc && d < bd) {
+        if (d < Math.max(22, T.r * wp.rm * sc) && d < bd) {   // uzaktaki küçük hayvanlar için en az 22 px isabet alanı
           const c = this.ch.find(o => o.id === id);
           if (c && c.state !== 'dead' && c.state !== 'hide') { best = c; bd = d; }
         }
@@ -274,6 +308,13 @@ class Room {
     this.send(p, { t: 'ammo', a: wp.mag, r: wp.reload });
   }
 
+  // sonraki turun süresi: yalnızca turlar arasında değişir
+  setRound(s) {
+    if (this.phase !== 'break' || !ROUNDS.includes(s) || s === this.round) return;
+    this.round = s;
+    this.broadcast({ t: 'round', s });
+  }
+
   setWeapon(p, w) {
     const now = Date.now();
     if (!WEAPONS[w] || w === p.weapon || now - p.lastSwitch < 800) return;
@@ -290,14 +331,16 @@ class Room {
       this.timer -= dt;
       if (this.timer <= 0) {
         this.phase = 'break'; this.timer = BREAK;
-        this.broadcast({ t: 'end', b: this.board(), tm: BREAK });
+        const nr = [];   // bu turda rekor kıran/rekor listesine giren oyuncular
+        for (const p of this.players.values()) if (submitScore(this.round, p.name, p.score)) nr.push(p.name);
+        this.broadcast({ t: 'end', b: this.board(), tm: BREAK, d: this.round, rec: scores[this.round] || [], nr });
       }
       this.spawnT -= dt;
       if (this.spawnT <= 0 && this.ch.filter(c => c.state !== 'dead').length < MAXCH) { this.spawn(); this.spawnT = rnd(0.5, 1.4); }
     } else {
       this.timer -= dt;
       if (this.timer <= 0) {
-        this.phase = 'play'; this.timer = ROUND; this.ch = [];
+        this.phase = 'play'; this.timer = this.round; this.ch = [];
         for (const p of this.players.values()) { p.score = 0; p.kills = 0; p.shots = 0; p.ammo = WEAPONS[p.weapon].mag; p.reloadUntil = 0; this.send(p, { t: 'ammo', a: p.ammo, mag: p.ammo }); }
         this.broadcast({ t: 'start', b: this.board() });
       }
@@ -331,16 +374,19 @@ wss.on('connection', (ws, req) => {
     if (!p) {
       if (m.t !== 'join') return;
       room = rooms.get(roomId);
-      if (!room) { room = new Room(roomId); rooms.set(roomId, room); }
+      if (!room) { room = new Room(roomId, +m.r); rooms.set(roomId, room); }
       if (room.players.size >= MAXP) { ws.send(JSON.stringify({ t: 'full' })); ws.close(); return; }
       const name = String(m.name || 'Avcı').replace(/[<>&"]/g, '').trim().slice(0, 14) || 'Avcı';
       p = room.addPlayer(ws, name, m.w);
+      // oyuncunun tarayıcısında saklı kişisel rekorları: sunucu sıfırlanmışsa liste yeniden kurulur
+      if (m.pb && typeof m.pb === 'object') for (const d of ROUNDS) submitScore(d, name, m.pb[d]);
       return;
     }
     if (m.t === 'aim') { p.aim.x = clamp(+m.x || 0, 0, W); p.aim.y = clamp(+m.y || 0, 0, H); }
     else if (m.t === 'shot') room.shoot(p, m);
     else if (m.t === 'reload') room.reload(p);
     else if (m.t === 'weapon') room.setWeapon(p, m.w);
+    else if (m.t === 'round') room.setRound(+m.s);
   });
   ws.on('close', () => { if (room && p) room.removePlayer(p); });
 });
