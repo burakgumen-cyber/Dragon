@@ -15,8 +15,11 @@ const ROUND = 120;          // tur süresi (sn)
 const BREAK = 10;           // turlar arası (sn)
 const MAXCH = 14;           // aynı anda en fazla tavuk
 const MAXP = 8;             // oda başına en fazla avcı
-const MAG = 6;              // şarjör
-const RELOAD_MS = 1300;
+// Silahlar (istemciyle aynı). gap: atışlar arası ms, rm: isabet alanı çarpanı, scare: atışın ürküttüğü yarıçap
+const WEAPONS = {
+  rifle: { mag: 6, gap: 360, reload: 1800, rm: 1, scare: 280 },     // gürültülü, isabetli, yavaş
+  sling: { mag: 10, gap: 340, reload: 900, rm: 0.85, scare: 90 },   // sessiz, hızlı, küçük isabet alanı
+};
 
 const COVERS = [
   { x: 560, y: 640, w: 150, h: 110, type: 'hay' },
@@ -30,9 +33,15 @@ const SPAWNS = [
   { x: 330, y: 495 }, { x: 1270, y: 495 },              // ahır ve kümes kapısı
   { x: -50, y: 620 }, { x: 1650, y: 700 }, { x: -50, y: 800 }, { x: 1650, y: 540 },
 ];
-const TYPES = { normal: { pts: 1, spd: 1 }, black: { pts: 2, spd: 1.25 }, golden: { pts: 5, spd: 1.9 } };
+// r: isabet yarıçapı, cy: hedef merkezinin yerden yüksekliği
+const TYPES = {
+  normal: { pts: 1, spd: 1, r: 32, cy: 28 },
+  black: { pts: 2, spd: 1.25, r: 32, cy: 28 },
+  golden: { pts: 5, spd: 1.9, r: 32, cy: 28 },
+  rabbit: { pts: 10, spd: 1.5, r: 28, cy: 18 },
+};
 const ST = { walk: 0, run: 1, idle: 2, fly: 3, hide: 4, peek: 5, dead: 6, exit: 7, tohide: 8 };
-const TY = { normal: 0, black: 1, golden: 2 };
+const TY = { normal: 0, black: 1, golden: 2, rabbit: 3 };
 const COLORS = ['#e63946', '#2a9d8f', '#f4a261', '#4895ef', '#9b5de5', '#00bbf9', '#f15bb5', '#80b918'];
 
 const scale = y => 0.55 + (y - GY0) / (GY1 - GY0) * 0.65;
@@ -75,12 +84,13 @@ class Room {
   broadcast(m) { const s = JSON.stringify(m); for (const p of this.players.values()) if (p.ws.readyState === 1) p.ws.send(s); }
   board() { return [...this.players.values()].map(p => ({ id: p.id, n: p.name, c: p.color, s: p.score, k: p.kills, sh: p.shots })).sort((a, b) => b.s - a.s); }
 
-  addPlayer(ws, name) {
+  addPlayer(ws, name, weapon) {
     const used = new Set([...this.players.values()].map(p => p.color));
     const color = COLORS.find(c => !used.has(c)) || COLORS[0];
-    const p = { id: this.nextPid++, ws, name, color, score: 0, kills: 0, shots: 0, ammo: MAG, reloadUntil: 0, lastShot: 0, aim: { x: W / 2, y: H / 2 } };
+    const wp = WEAPONS[weapon] ? weapon : 'rifle';
+    const p = { id: this.nextPid++, ws, name, color, score: 0, kills: 0, shots: 0, weapon: wp, ammo: WEAPONS[wp].mag, reloadUntil: 0, lastShot: 0, lastSwitch: 0, aim: { x: W / 2, y: H / 2 } };
     this.players.set(p.id, p);
-    this.send(p, { t: 'welcome', id: p.id, color, room: this.id, ph: this.phase, tm: Math.ceil(this.timer), ammo: p.ammo, mag: MAG });
+    this.send(p, { t: 'welcome', id: p.id, color, room: this.id, ph: this.phase, tm: Math.ceil(this.timer), ammo: p.ammo, mag: WEAPONS[wp].mag });
     this.broadcast({ t: 'b', b: this.board(), msg: `${name} odaya katıldı` });
     return p;
   }
@@ -95,7 +105,8 @@ class Room {
   spawn() {
     const sp = SPAWNS[Math.random() * SPAWNS.length | 0];
     const r = Math.random();
-    const type = r < 0.08 ? 'golden' : r < 0.28 ? 'black' : 'normal';
+    const hasRabbit = this.ch.some(o => o.type === 'rabbit' && o.state !== 'dead');   // aynı anda en fazla bir tavşan
+    const type = r < 0.03 && !hasRabbit ? 'rabbit' : r < 0.09 ? 'golden' : r < 0.28 ? 'black' : 'normal';
     const c = { id: this.nextId++, x: sp.x, y: sp.y, z: 0, type, state: 'run', t: 0, dir: 1, tx: 0, ty: 0, cover: -1, fly: null, spd: rnd(70, 105) * TYPES[type].spd };
     this.target(c, rnd(100, W - 100), rnd(GY0 + 20, GY1 - 10));
     this.ch.push(c);
@@ -125,6 +136,12 @@ class Room {
   }
 
   startFly(c, exit) {
+    if (c.type === 'rabbit') {   // tavşan uçmaz, kaçar
+      c.cover = -1; c.state = exit ? 'exit' : 'run';
+      if (exit) this.target(c, c.x < W / 2 ? -80 : W + 80, c.y);
+      else this.target(c, rnd(80, W - 80), rnd(GY0 + 10, GY1 - 10));
+      return;
+    }
     const h = rnd(110, 260) * (c.type === 'black' ? 1.3 : 1);
     let x1 = rnd(80, W - 80); const y1 = rnd(GY0 + 10, GY1 - 10);
     if (exit) x1 = c.x < W / 2 ? W + 90 : -90;
@@ -185,15 +202,15 @@ class Room {
   }
 
   // Atış sesi yakındaki tavukları ürkütür
-  scare(x, y) {
+  scare(x, y, rad) {
     for (const c of this.ch) {
       if (c.state === 'dead' || c.state === 'hide' || c.state === 'fly' || c.state === 'tohide') continue;
       const d = Math.hypot(c.x - x, c.y - y);
       if (c.state === 'peek') {
-        if (d < 260) { const cv = COVERS[c.cover]; c.state = 'hide'; c.x = cv.x; c.y = cv.y - 8; c.t = rnd(1.5, 3); }
+        if (d < rad + 20) { const cv = COVERS[c.cover]; c.state = 'hide'; c.x = cv.x; c.y = cv.y - 8; c.t = rnd(1.5, 3); }
         continue;
       }
-      if (d > 240) continue;
+      if (d > rad) continue;
       const r = Math.random();
       if (r < 0.3) this.startFly(c, Math.random() < 0.3);
       else if (r < 0.75 && this.goHide(c, true)) { /* saklanmaya koşuyor */ }
@@ -207,8 +224,8 @@ class Room {
 
   // ----- Atış -----
   shoot(p, m) {
-    const now = Date.now();
-    if (this.phase !== 'play' || now < p.reloadUntil || now - p.lastShot < 180) return;
+    const now = Date.now(), wp = WEAPONS[p.weapon];
+    if (this.phase !== 'play' || now < p.reloadUntil || now - p.lastShot < wp.gap - 40) return;
     if (p.ammo <= 0) { this.reload(p); return; }
     const x = +m.x, y = +m.y;
     if (!isFinite(x) || !isFinite(y)) return;
@@ -221,9 +238,9 @@ class Room {
       if (Math.abs(h.tick - tick) > 1) continue;
       for (const [id, s] of h.ch) {
         if (!s.hit) continue;
-        const sc = scale(s.y), cx = s.x, cy = s.y - s.z - 28 * sc;
+        const T = TYPES[s.ty] || TYPES.normal, sc = scale(s.y), cx = s.x, cy = s.y - s.z - T.cy * sc;
         const d = Math.hypot(x - cx, y - cy);
-        if (d < 32 * sc && d < bd) {
+        if (d < T.r * wp.rm * sc && d < bd) {
           const c = this.ch.find(o => o.id === id);
           if (c && c.state !== 'dead' && c.state !== 'hide') { best = c; bd = d; }
         }
@@ -236,18 +253,26 @@ class Room {
       best.state = 'dead'; best.t = 1.2; best.cover = -1;
       hit = best.id;
     }
-    this.broadcast({ t: 'fx', pid: p.id, x: Math.round(x), y: Math.round(y), hit, pts, ty: best ? best.type : null });
+    this.broadcast({ t: 'fx', pid: p.id, x: Math.round(x), y: Math.round(y), hit, pts, ty: best ? best.type : null, w: p.weapon });
     this.send(p, { t: 'ammo', a: p.ammo });
     if (hit) this.broadcast({ t: 'b', b: this.board() });
-    this.scare(x, y);
+    this.scare(x, y, wp.scare);
     if (p.ammo === 0) this.reload(p);
   }
 
   reload(p) {
+    const now = Date.now(), wp = WEAPONS[p.weapon];
+    if (p.ammo === wp.mag || now < p.reloadUntil) return;
+    p.reloadUntil = now + wp.reload; p.ammo = wp.mag;
+    this.send(p, { t: 'ammo', a: wp.mag, r: wp.reload });
+  }
+
+  setWeapon(p, w) {
     const now = Date.now();
-    if (p.ammo === MAG || now < p.reloadUntil) return;
-    p.reloadUntil = now + RELOAD_MS; p.ammo = MAG;
-    this.send(p, { t: 'ammo', a: MAG, r: RELOAD_MS });
+    if (!WEAPONS[w] || w === p.weapon || now - p.lastSwitch < 800) return;
+    p.weapon = w; p.lastSwitch = now;
+    p.ammo = WEAPONS[w].mag; p.reloadUntil = now + 500;
+    this.send(p, { t: 'ammo', a: p.ammo, mag: p.ammo, r: 500 });
   }
 
   // ----- Ana döngü -----
@@ -266,14 +291,14 @@ class Room {
       this.timer -= dt;
       if (this.timer <= 0) {
         this.phase = 'play'; this.timer = ROUND; this.ch = [];
-        for (const p of this.players.values()) { p.score = 0; p.kills = 0; p.shots = 0; p.ammo = MAG; p.reloadUntil = 0; this.send(p, { t: 'ammo', a: MAG }); }
+        for (const p of this.players.values()) { p.score = 0; p.kills = 0; p.shots = 0; p.ammo = WEAPONS[p.weapon].mag; p.reloadUntil = 0; this.send(p, { t: 'ammo', a: p.ammo, mag: p.ammo }); }
         this.broadcast({ t: 'start', b: this.board() });
       }
     }
     for (const c of this.ch) this.updC(c, dt);
     this.ch = this.ch.filter(c => !c.gone);
 
-    this.hist.push({ tick: this.tick, ch: new Map(this.ch.map(c => [c.id, { x: c.x, y: c.y, z: c.z, hit: c.state !== 'hide' && c.state !== 'dead' }])) });
+    this.hist.push({ tick: this.tick, ch: new Map(this.ch.map(c => [c.id, { x: c.x, y: c.y, z: c.z, ty: c.type, hit: c.state !== 'hide' && c.state !== 'dead' }])) });
     if (this.hist.length > 30) this.hist.shift();
 
     const msg = { t: 's', k: this.tick, tm: Math.ceil(this.timer), ph: this.phase,
@@ -302,12 +327,13 @@ wss.on('connection', (ws, req) => {
       if (!room) { room = new Room(roomId); rooms.set(roomId, room); }
       if (room.players.size >= MAXP) { ws.send(JSON.stringify({ t: 'full' })); ws.close(); return; }
       const name = String(m.name || 'Avcı').replace(/[<>&"]/g, '').trim().slice(0, 14) || 'Avcı';
-      p = room.addPlayer(ws, name);
+      p = room.addPlayer(ws, name, m.w);
       return;
     }
     if (m.t === 'aim') { p.aim.x = clamp(+m.x || 0, 0, W); p.aim.y = clamp(+m.y || 0, 0, H); }
     else if (m.t === 'shot') room.shoot(p, m);
     else if (m.t === 'reload') room.reload(p);
+    else if (m.t === 'weapon') room.setWeapon(p, m.w);
   });
   ws.on('close', () => { if (room && p) room.removePlayer(p); });
 });
@@ -317,7 +343,7 @@ setInterval(() => {
 }, 30000);
 
 server.listen(PORT, () => {
-  console.log(`🐔 Tavuk Avı sunucusu çalışıyor: http://localhost:${PORT}`);
+  console.log(`🌾 Avcı Toynaklar sunucusu çalışıyor: http://localhost:${PORT}`);
   const nets = require('os').networkInterfaces();
   for (const list of Object.values(nets)) for (const n of list || [])
     if (n.family === 'IPv4' && !n.internal) console.log(`   Aynı ağdaki telefonlar için: http://${n.address}:${PORT}`);

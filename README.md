@@ -1,6 +1,6 @@
-# 🐔 Tavuk Avı Online
+# 🌾 Avcı Toynaklar
 
-Tarayıcıda (PC + mobil) oynanan, çok oyunculu çiftlik tavuk avı oyunu.
+Tarayıcıda (PC + mobil) oynanan, çok oyunculu çiftlik avı oyunu. Tavuklar (1-5 puan) ve nadir, çok hızlı tavşan (10 puan) avlanır. Silah seçeneği: tüfek (isabetli, gürültülü) veya sapan (sessiz, seri). Oyun içinde 1 / 2 / Q tuşlarıyla silah değiştirilir.
 
 ## Çalıştırma (kendi bilgisayarında)
 
