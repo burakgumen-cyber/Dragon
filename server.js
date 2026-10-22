@@ -7,6 +7,7 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const PUB = path.join(__dirname, 'public');
+const DEFAULT_ROOM = 'toynaklar';   // oda adı verilmezse herkes buraya girer
 
 // ---------- Dünya sabitleri (istemciyle aynı) ----------
 const W = 1600, H = 900, GY0 = 490, GY1 = 850;
@@ -53,6 +54,12 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascri
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent(req.url.split('?')[0]);
   if (p === '/') p = '/index.html';
+  if (p === '/api/rooms') {   // lobide gösterilecek oda doluluğu: yalnızca sayı, isim yok
+    const list = [...rooms.values()].map(r => ({ id: r.id, n: r.players.size }));
+    if (!rooms.has(DEFAULT_ROOM)) list.unshift({ id: DEFAULT_ROOM, n: 0 });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ def: DEFAULT_ROOM, max: MAXP, rooms: list }));
+  }
   const f = path.join(PUB, path.normalize(p));
   if (!f.startsWith(PUB)) { res.writeHead(403); return res.end(); }
   fs.readFile(f, (e, d) => {
@@ -314,7 +321,7 @@ const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 2048 });
 
 wss.on('connection', (ws, req) => {
   const q = new URL(req.url, 'http://x').searchParams;
-  const roomId = (q.get('room') || 'ciftlik').toLowerCase().replace(/[^a-z0-9ğüşıöç_-]/g, '').slice(0, 20) || 'ciftlik';
+  const roomId = (q.get('room') || DEFAULT_ROOM).toLowerCase().replace(/[^a-z0-9ğüşıöç_-]/g, '').slice(0, 20) || DEFAULT_ROOM;
   let room = null, p = null;
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });

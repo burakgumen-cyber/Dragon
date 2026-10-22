@@ -38,6 +38,8 @@ canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:no
 .card p{font-size:14px;margin-bottom:12px;opacity:.85}
 .card label{display:block;font-size:13px;font-weight:700;margin:8px 0 4px}
 .card input{width:100%;padding:11px 12px;border-radius:10px;border:2px solid #d8c9a8;font-size:16px;background:#fff}
+.live{font-size:13px;font-weight:700;margin:6px 0 2px;min-height:18px;color:#2a7a4b}
+.live.off{color:#7a6a55;font-weight:600}
 .seg{display:flex;gap:8px;margin:12px 0}
 .seg button{flex:1;padding:10px;border-radius:10px;border:2px solid #d8c9a8;background:#fff;font-size:15px;font-weight:700;color:#3b2a1a;cursor:pointer}
 .seg button.on{border-color:#e76f51;background:#ffe8df}
@@ -67,7 +69,8 @@ canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:no
   <h1>🌾 Avcı Toynaklar</h1>
   <p>Çiftlikteki tavuklar ve ara sıra bir tavşan ahırdan, kümesten ve tarlanın kenarından çıkıyor; kaçıyor, uçuyor, saman balyalarının arkasına saklanıyor. Arkadaşlarınla aynı odaya gir, en çok puanı topla!</p>
   <label for="nm">Adın</label><input id="nm" maxlength="14" placeholder="Avcı">
-  <label for="rm">Oda adı (arkadaşlarınla aynı odayı yaz)</label><input id="rm" maxlength="20" placeholder="ciftlik">
+  <label for="rm">Oda adı (herkes “Toynaklar” odasına girer; farklı oda için başka ad yaz)</label><input id="rm" maxlength="20" placeholder="Toynaklar">
+  <div id="live" class="live"></div>
   <label>Silah</label>
   <div class="seg" id="wp" style="margin-top:4px"><button data-v="rifle" class="on">🔫 Tüfek</button><button data-v="sling">🎯 Sapan (lastik)</button></div>
   <div class="seg" id="pos"><button data-v="window" class="on">🪟 Pencere</button><button data-v="trench">🪖 Siper</button></div>
@@ -821,7 +824,21 @@ setInterval(() => {
 // ---------- Lobi ----------
 const qs = new URLSearchParams(location.search);
 $('nm').value = localStorage.getItem('ta_name') || '';
-$('rm').value = qs.get('room') || localStorage.getItem('ta_room') || 'ciftlik';
+$('rm').value = qs.get('room') || 'Toynaklar';
+// Lobide odadaki avcı sayısı (yalnızca sayı, isim gösterilmez)
+let roomInfo = null;
+function showLive() {
+  const el = $('live'); if (!roomInfo) { el.textContent = ''; return; }
+  const id = ($('rm').value.trim() || 'Toynaklar').toLowerCase(), r = roomInfo.rooms.find(x => x.id === id), n = r ? r.n : 0;
+  el.className = 'live' + (n ? '' : ' off');
+  el.textContent = n >= roomInfo.max ? `🔴 Bu oda dolu (${n}/${roomInfo.max}), başka bir oda dene` : n ? `🟢 Şu an bu odada ${n} avcı oynuyor, sen de katıl!` : '⚪ Bu odada şu an kimse yok, ilk sen gir!';
+}
+function pollRooms() {
+  if (playing) return;
+  fetch('/api/rooms', { cache: 'no-store' }).then(r => r.json()).then(j => { roomInfo = j; showLive(); }).catch(() => {});
+}
+$('rm').addEventListener('input', showLive);
+pollRooms(); setInterval(pollRooms, 5000);
 const markWeapon = () => [...$('wp').children].forEach(x => x.classList.toggle('on', x.dataset.v === weapon));
 markWeapon();
 $('wp').addEventListener('click', e => {
@@ -835,8 +852,8 @@ $('pos').addEventListener('click', e => {
 $('go').addEventListener('click', () => {
   initAudio();
   wantName = $('nm').value.trim() || 'Avcı' + Math.floor(Math.random() * 100);
-  wantRoom = ($('rm').value.trim() || 'ciftlik').toLowerCase();
-  try { localStorage.setItem('ta_name', wantName); localStorage.setItem('ta_room', wantRoom); localStorage.setItem('ta_weapon', weapon); } catch (e) {}
+  wantRoom = ($('rm').value.trim() || 'Toynaklar').toLowerCase();
+  try { localStorage.setItem('ta_name', wantName); localStorage.setItem('ta_weapon', weapon); } catch (e) {}
   $('wpBtn').textContent = WP[weapon].name; $('wpBtn').classList.remove('hidden');
   history.replaceState(null, '', `?room=${encodeURIComponent(wantRoom)}`);
   $('lobby').classList.add('hidden');
