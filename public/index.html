@@ -159,20 +159,46 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // ---------- Ses (WebAudio ile üretilir, dosya gerekmez) ----------
-let ac = null, noiseBuf = null;
-function initAudio() {
-  if (ac) return;
-  try {
-    ac = new (window.AudioContext || window.webkitAudioContext)();
-    noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  } catch (e) { ac = null; }
+let ac = null, noiseBuf = null, master = null, silentEl = null;
+// Telefonlarda ses bağlamı ancak bir dokunuşun içinde "uyandırılırsa" çalar (iPhone ve Android kuralı).
+// iPhone'un sessiz modu Web Audio'yu kapatır; sessiz bir <audio> oynatmak ve audioSession "playback" yapmak bunu aşar.
+function silentWavUrl() {
+  const n = 800, b = new Uint8Array(44 + n), dv = new DataView(b.buffer), w = (o, s) => [...s].forEach((c, i) => { b[o + i] = c.charCodeAt(0); });
+  w(0, 'RIFF'); dv.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, 8000, true); dv.setUint32(28, 8000, true); dv.setUint16(32, 1, true); dv.setUint16(34, 8, true); w(36, 'data'); dv.setUint32(40, n, true); b.fill(128, 44);
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
 }
+function unlockAudio() {
+  if (!ac) return;
+  if (ac.state !== 'running') { try { ac.resume(); } catch (e) {} }
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  try {
+    if (!silentEl) { silentEl = new Audio(silentWavUrl()); silentEl.loop = true; silentEl.volume = 0.02; }
+    if (silentEl.paused) { const pr = silentEl.play(); if (pr && pr.catch) pr.catch(() => {}); }
+  } catch (e) {}
+}
+function initAudio() {
+  if (!ac) {
+    try {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      // ana ses: yükseltme + sıkıştırıcı (telefon hoparlörleri için daha gür, bozulmadan)
+      master = ac.createGain(); master.gain.value = 1.7;
+      const comp = ac.createDynamicsCompressor(); comp.threshold.value = -14; comp.knee.value = 12; comp.ratio.value = 6;
+      master.connect(comp); comp.connect(ac.destination);
+    } catch (e) { ac = null; return; }
+  }
+  unlockAudio();
+}
+// her dokunuş/tuş sesin açık kalmasını sağlar (arka plandan dönünce de)
+['pointerdown', 'touchstart', 'touchend', 'click', 'keydown'].forEach(ev => addEventListener(ev, initAudio, { passive: true, capture: true }));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) unlockAudio(); });
 // --- ses yardımcıları: p = -1 (sol) .. 1 (sağ) ---
 function out(node, p) {
-  if (ac.createStereoPanner) { const n = ac.createStereoPanner(); n.pan.value = Math.max(-1, Math.min(1, p || 0)); node.connect(n); n.connect(ac.destination); }
-  else node.connect(ac.destination);
+  if (ac.createStereoPanner) { const n = ac.createStereoPanner(); n.pan.value = Math.max(-1, Math.min(1, p || 0)); node.connect(n); n.connect(master); }
+  else node.connect(master);
 }
 function nz(t, dur, type, f0, f1, vol, p, q = 1) {
   const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
@@ -267,6 +293,29 @@ function sfxPanic(vol = 0.08, p = 0) {        // ürken tavuk
   const t = ac.currentTime;
   for (let i = 0; i < 3; i++) voc(t + i * 0.09, 820 - i * 60, 450, 0.08, vol, p, 1600);
   nz(t, 0.25, 'bandpass', 2500, 1200, vol * 0.4, p, 1);       // kanat çırpma
+}
+function sfxGidak(vol = 0.3, p = 0) {         // vurulan tavuk: "gıt gıt gıt gıdaaak!"
+  if (!ac) return;
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.1, n = 3 + (Math.random() * 2 | 0);
+  for (let i = 0; i < n; i++) voc(t + i * 0.085, (980 - i * 40) * f, 640 * f, 0.065, vol, p, 1700);   // gıt gıt gıt
+  const s = t + n * 0.085 + 0.03;
+  voc(s, 600 * f, 1050 * f, 0.16, vol * 1.1, p, 1500);                                               // gıda...
+  voc(s + 0.15, 1050 * f, 520 * f, 0.32, vol, p, 1300);                                              // ...aaak
+  nz(s, 0.12, 'highpass', 3200, 5200, vol * 0.2, p);                                                  // tüy hışırtısı
+}
+function sfxHoroz(vol = 0.12, p = 0) {        // horozun ötüşü: "ü-ürü-üüüü"
+  if (!ac) return;
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.08;
+  voc(t, 430 * f, 780 * f, 0.2, vol, p, 1000);
+  voc(t + 0.22, 760 * f, 560 * f, 0.1, vol * 0.8, p, 1000);
+  voc(t + 0.34, 540 * f, 900 * f, 0.16, vol, p, 1200);
+  voc(t + 0.52, 880 * f, 600 * f, 0.55, vol * 1.1, p, 1300);
+  voc(t + 0.52, 892 * f, 612 * f, 0.55, vol * 0.5, p, 1500);
+}
+function sfxCiyak(vol = 0.1, p = 0) {         // civciv "cik cik cik"
+  if (!ac) return;
+  const t = ac.currentTime;
+  for (let i = 0; i < 3; i++) tn(t + i * 0.11, 0.08, 'sine', 2300 + Math.random() * 300, 3300, vol, p);
 }
 function sfxSqueak(vol = 0.2, p = 0) {        // vurulan tavşan
   if (!ac) return;
@@ -769,7 +818,7 @@ function onFx(m) {
     const fc = m.ty === 'golden' ? '#ffd23f' : m.ty === 'black' ? '#2e2e33' : rab ? '#c9b08e' : '#ffffff';
     for (let i = 0; i < (rab ? 22 : 18); i++) parts.push({ k: 'f', x: px, y: py, vx: (Math.random() - 0.5) * 260, vy: (Math.random() - 0.8) * 220, life: 1.6, rot: Math.random() * 6, col: fc });
     parts.push({ k: 't', x: px, y: py - 30, vy: -60, life: rab ? 1.8 : 1.3, txt: `+${m.pts}`, col });
-    if (rab) sfxSqueak(mine ? 0.3 : 0.15, pn); else sfxCluck(mine ? 0.4 : 0.2, pn);
+    if (rab) sfxSqueak(mine ? 0.3 : 0.15, pn); else sfxGidak(mine ? 0.4 : 0.28, pn);
     if (pl) feed(`${pl.n} ${rab ? '🐇 TAVŞAN' : m.ty === 'golden' ? '✨ ALTIN tavuk' : m.ty === 'black' ? '🐓 siyah tavuk' : '🐔 tavuk'} vurdu +${m.pts}`, col);
   } else {
     for (let i = 0; i < 8; i++) parts.push({ k: 'd', x: m.x, y: m.y, vx: (Math.random() - 0.5) * 80, vy: -Math.random() * 60, life: 0.7, r: 4 + Math.random() * 6 });
@@ -1211,11 +1260,15 @@ function frame(now) {
   lastChickens = nowMap;
   // çiftlik havası: arada tavuklar "bok bok" ve "glu glu" yapar
   if (ac && playing && phase === 'play' && now > nextCluck) {
-    nextCluck = now + 900 + Math.random() * 2600;
+    nextCluck = now + 700 + Math.random() * 2300;
     const cand = chs.filter(c => c.ty !== 'rabbit' && c.st !== 'dead' && c.st !== 'hide' && c.x > 0 && c.x < W);
     if (cand.length) {
-      const c = cand[Math.random() * cand.length | 0], pn = (c.x / W - 0.5) * 1.6, v = 0.07 * (0.45 + scale(c.y) * 0.7);
-      if (Math.random() < 0.55) sfxGlu(v, pn); else sfxBok(v * 1.2, pn);
+      const c = cand[Math.random() * cand.length | 0], pn = (c.x / W - 0.5) * 1.6, v = 0.15 * (0.5 + scale(c.y) * 0.7), r = Math.random();
+      if (c.ty === 'black' && r < 0.25) sfxHoroz(v * 0.9, pn);         // siyah tavuklar horoz gibi öter
+      else if (r < 0.32) sfxGlu(v, pn);
+      else if (r < 0.62) sfxBok(v * 1.2, pn);
+      else if (r < 0.82) sfxGidak(v * 0.55, pn);                        // yumurta gıdaklaması (kısık)
+      else sfxCiyak(v * 0.6, pn);
     }
   }
 
