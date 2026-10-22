@@ -213,13 +213,20 @@ function tn(t, dur, type, f0, f1, vol, p) {
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
   o.connect(g); out(g, p); o.start(t); o.stop(t + dur + 0.02);
 }
-// hayvan "sesi": testere dişi dalga + formant süzgeci
-function voc(t, f0, f1, dur, vol, p, ff = 1000) {
-  const o = ac.createOscillator(), f = ac.createBiquadFilter(), g = ac.createGain();
-  o.type = 'sawtooth'; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
-  f.type = 'bandpass'; f.frequency.setValueAtTime(ff, t); f.frequency.exponentialRampToValueAtTime(ff * 0.6, t + dur); f.Q.value = 5;
-  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.012); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  o.connect(f).connect(g); out(g, p); o.start(t); o.stop(t + dur + 0.02);
+// hayvan "sesi": gırtlak titreşimi (testere dişi) → iki formant süzgeci (boğaz ve gaga boşluğu) + soluk gürültüsü
+// o2: vib = titreşim hızı (Hz), vd = titreşim derinliği, rasp = hırıltı/soluk miktarı
+function voc(t, f0, f1, dur, vol, p, ff = 1000, o2 = {}) {
+  const o = ac.createOscillator(), g = ac.createGain(), a = ac.createBiquadFilter(), b = ac.createBiquadFilter(), ga = ac.createGain(), gb = ac.createGain();
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(60, f1), t + dur);
+  if (o2.vib) { const l = ac.createOscillator(), lg = ac.createGain(); l.frequency.value = o2.vib; lg.gain.value = f0 * (o2.vd || 0.05); l.connect(lg); lg.connect(o.frequency); l.start(t); l.stop(t + dur + 0.05); }
+  a.type = b.type = 'bandpass'; a.Q.value = 4; b.Q.value = 6;
+  a.frequency.setValueAtTime(ff, t); a.frequency.exponentialRampToValueAtTime(ff * 0.78, t + dur);
+  b.frequency.setValueAtTime(ff * 2.6, t); b.frequency.exponentialRampToValueAtTime(ff * 2.2, t + dur);
+  ga.gain.value = 1; gb.gain.value = 0.5;
+  o.connect(a); o.connect(b); a.connect(ga); b.connect(gb); ga.connect(g); gb.connect(g);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + Math.min(0.014, dur * 0.3)); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  out(g, p); o.start(t); o.stop(t + dur + 0.05);
+  if (o2.rasp) nz(t, dur, 'bandpass', ff * 1.9, ff * 1.5, vol * o2.rasp, p, 1.5);
 }
 
 // --- silah sesleri ---
@@ -265,52 +272,57 @@ function sfxSwitch() {
 }
 
 // --- hayvan sesleri ---
-function sfxBok(vol = 0.08, p = 0) {          // "bok bok"
-  if (!ac) return;
-  const t = ac.currentTime, v = vol * (0.85 + Math.random() * 0.3), f = 1 + (Math.random() - 0.5) * 0.12;
-  voc(t, 420 * f, 220 * f, 0.1, v, p, 1100);
-  voc(t + 0.13, 380 * f, 200 * f, 0.12, v * 0.8, p, 1000);
-  if (Math.random() < 0.4) voc(t + 0.3, 330 * f, 540 * f, 0.22, v, p, 1400);   // "bakaak"
+// hoşnut tavuğun "gıırr gıırr" mırıltısı: alçak ses + 13-17 Hz genlik titreşimi ("r" yuvarlanması)
+function purr(t, dur, f, vol, p) {
+  const o = ac.createOscillator(), a = ac.createBiquadFilter(), g = ac.createGain(), l = ac.createOscillator(), lg = ac.createGain(), base = ac.createGain();
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(f, t); o.frequency.linearRampToValueAtTime(f * 1.18, t + dur * 0.5); o.frequency.linearRampToValueAtTime(f * 0.92, t + dur);
+  a.type = 'bandpass'; a.frequency.value = 780; a.Q.value = 3;
+  base.gain.value = vol * 0.5;
+  l.frequency.value = 13 + Math.random() * 4; lg.gain.value = vol * 0.5; l.connect(lg); lg.connect(base.gain);
+  o.connect(a); a.connect(base); base.connect(g);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(1, t + 0.06); g.gain.setValueAtTime(1, t + dur - 0.12); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  out(g, p); o.start(t); l.start(t); o.stop(t + dur + 0.05); l.stop(t + dur + 0.05);
 }
-function sfxGlu(vol = 0.08, p = 0) {          // "glu glu glu"
+function sfxBok(vol = 0.1, p = 0) {           // "bok bok": kısa, burunsal gıdak (bazen "bakaak")
   if (!ac) return;
-  const t = ac.currentTime, n = 3 + (Math.random() * 3 | 0), f = 1 + (Math.random() - 0.5) * 0.15;
+  const t = ac.currentTime, v = vol * (0.85 + Math.random() * 0.3), f = 1 + (Math.random() - 0.5) * 0.14, n = 1 + (Math.random() * 3 | 0);
+  for (let i = 0; i < n; i++) voc(t + i * (0.17 + Math.random() * 0.05), (540 - i * 25) * f, (300 - i * 10) * f, 0.1, v * (1 - i * 0.08), p, 900, { rasp: 0.25 });
+  if (Math.random() < 0.35) voc(t + n * 0.2 + 0.05, 380 * f, 640 * f, 0.26, v * 0.9, p, 1100, { vib: 22, vd: 0.05, rasp: 0.3 });
+}
+function sfxGlu(vol = 0.1, p = 0) {           // "gıırr gıırr" mırıltısı ya da "glu glu glu"
+  if (!ac) return;
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.15;
+  if (Math.random() < 0.5) { purr(t, 0.7 + Math.random() * 0.5, 250 * f, vol * 1.3, p); return; }
+  const n = 3 + (Math.random() * 3 | 0);
   for (let i = 0; i < n; i++) {
     const st = t + i * 0.12;
-    voc(st, 280 * f, 470 * f, 0.09, vol * (1 - i * 0.07), p, 760);
-    tn(st, 0.07, 'sine', 190 * f, 330 * f, vol * 0.5, p);
+    voc(st, 300 * f, 480 * f, 0.09, vol * (1 - i * 0.07), p, 760, { rasp: 0.15 });
+    tn(st, 0.07, 'sine', 190 * f, 330 * f, vol * 0.4, p);
   }
 }
-function sfxCluck(vol = 0.25, p = 0) {        // vurulan tavuğun çığlığı
+function sfxGidak(vol = 0.3, p = 0) {         // vurulan tavuk: "bok bok bok bok BAAAAK!" (yükselen gıdaklama + titrek çığlık)
   if (!ac) return;
-  const t = ac.currentTime;
-  voc(t, 760, 380, 0.26, vol * 0.5, p, 1500);
-  voc(t + 0.05, 560, 300, 0.2, vol * 0.3, p, 1200);
-  nz(t, 0.16, 'highpass', 3000, 5000, vol * 0.25, p);
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.1, n = 4 + (Math.random() * 3 | 0);
+  for (let i = 0; i < n; i++) voc(t + i * 0.1, (620 + i * 45) * f, (420 + i * 25) * f, 0.075, vol * (0.8 + i * 0.05), p, 1000 + i * 40, { rasp: 0.2 });
+  const s = t + n * 0.1 + 0.02;
+  voc(s, 700 * f, 1150 * f, 0.2, vol * 1.15, p, 1500, { vib: 28, vd: 0.06, rasp: 0.45 });
+  voc(s + 0.18, 1150 * f, 640 * f, 0.4, vol * 1.05, p, 1400, { vib: 34, vd: 0.07, rasp: 0.5 });
+  nz(s, 0.14, 'highpass', 3200, 5200, vol * 0.18, p);                                                 // tüy hışırtısı
 }
-function sfxPanic(vol = 0.08, p = 0) {        // ürken tavuk
+function sfxPanic(vol = 0.08, p = 0) {        // ürken tavuk: sert çığlıklar + kanat çırpma
   if (!ac) return;
-  const t = ac.currentTime;
-  for (let i = 0; i < 3; i++) voc(t + i * 0.09, 820 - i * 60, 450, 0.08, vol, p, 1600);
-  nz(t, 0.25, 'bandpass', 2500, 1200, vol * 0.4, p, 1);       // kanat çırpma
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.1;
+  for (let i = 0; i < 4; i++) voc(t + i * 0.085, (900 - i * 50) * f, 520 * f, 0.07, vol, p, 1500, { rasp: 0.5 });
+  for (let i = 0; i < 6; i++) nz(t + i * 0.05, 0.05, 'bandpass', 1800, 900, vol * 0.5, p, 1);
 }
-function sfxGidak(vol = 0.3, p = 0) {         // vurulan tavuk: "gıt gıt gıt gıdaaak!"
+function sfxHoroz(vol = 0.12, p = 0) {        // horozun ötüşü: "kü-kü-rü-küüü"
   if (!ac) return;
-  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.1, n = 3 + (Math.random() * 2 | 0);
-  for (let i = 0; i < n; i++) voc(t + i * 0.085, (980 - i * 40) * f, 640 * f, 0.065, vol, p, 1700);   // gıt gıt gıt
-  const s = t + n * 0.085 + 0.03;
-  voc(s, 600 * f, 1050 * f, 0.16, vol * 1.1, p, 1500);                                               // gıda...
-  voc(s + 0.15, 1050 * f, 520 * f, 0.32, vol, p, 1300);                                              // ...aaak
-  nz(s, 0.12, 'highpass', 3200, 5200, vol * 0.2, p);                                                  // tüy hışırtısı
-}
-function sfxHoroz(vol = 0.12, p = 0) {        // horozun ötüşü: "ü-ürü-üüüü"
-  if (!ac) return;
-  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.08;
-  voc(t, 430 * f, 780 * f, 0.2, vol, p, 1000);
-  voc(t + 0.22, 760 * f, 560 * f, 0.1, vol * 0.8, p, 1000);
-  voc(t + 0.34, 540 * f, 900 * f, 0.16, vol, p, 1200);
-  voc(t + 0.52, 880 * f, 600 * f, 0.55, vol * 1.1, p, 1300);
-  voc(t + 0.52, 892 * f, 612 * f, 0.55, vol * 0.5, p, 1500);
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.06;
+  voc(t, 420 * f, 700 * f, 0.16, vol, p, 950, { rasp: 0.2 });
+  voc(t + 0.2, 640 * f, 900 * f, 0.14, vol, p, 1100, { rasp: 0.2 });
+  voc(t + 0.38, 880 * f, 700 * f, 0.12, vol * 0.9, p, 1200, { rasp: 0.25 });
+  voc(t + 0.55, 760 * f, 1040 * f, 0.5, vol * 1.1, p, 1300, { vib: 8, vd: 0.03, rasp: 0.3 });
+  voc(t + 1.0, 1040 * f, 560 * f, 0.35, vol, p, 1200, { vib: 6, vd: 0.04, rasp: 0.3 });
 }
 function sfxCiyak(vol = 0.1, p = 0) {         // civciv "cik cik cik"
   if (!ac) return;
@@ -811,7 +823,7 @@ function onFx(m) {
   const pl = board.find(p => p.id === m.pid);
   const col = pl ? pl.c : '#fff';
   const pn = Math.max(-1, Math.min(1, (m.x / W - 0.5) * 1.4));
-  if (!mine) sfxShot(0.35, m.w, pn);
+  // silah sesi yalnızca atan oyuncuya çalar (fire() içinde); başkalarının atışı duyulmaz. Hayvan sesleri herkese çalar.
   if (m.hit) {
     const c = lastChickens.get(m.hit), rab = m.ty === 'rabbit';
     const px = c ? c.x : m.x, py = c ? c.y - c.z - (rab ? 18 : 28) * scale(c.y) : m.y;
