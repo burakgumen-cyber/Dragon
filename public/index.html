@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Avcı Toynaklar">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#1d2b1a">
 <title>Avcı Toynaklar</title>
 <style>
@@ -83,6 +87,7 @@ canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;cursor:no
   <div class="seg" id="wp" style="margin-top:4px"><button data-v="rifle" class="on">🔫 Tüfek</button><button data-v="sling">🎯 Sapan (lastik)</button></div>
   <div class="seg" id="pos"><button data-v="window" class="on">🪟 Pencere</button><button data-v="trench">🪖 Siper</button></div>
   <button class="btn" id="go">AVA BAŞLA</button>
+  <small id="iosHint" class="hidden" style="margin-bottom:8px;font-weight:700;opacity:1;color:#1d4ed8">📲 iPhone'da tam ekran için: tarayıcıda Paylaş ▸ “Ana Ekrana Ekle” de, oyunu ana ekrandaki simgeden aç. Adres çubuğu kaybolur.</small>
   <small>🖱️ PC: fareyle nişan al, sol tık ateş, sağ tık / R / boşluk doldur. 1 = Tüfek, 2 = Sapan.<br>📱 Mobil: hedefe dokun = ateş, “Doldur” ve silah düğmeleri.<br>🐔 Beyaz 1 · 🐓 Siyah 2 · ✨ Altın 5 · 🐇 Tavşan 10 puan (nadir ve çok hızlı!) · uçarken vurursan +1<br>🔫 Tüfek isabetli ama gürültülü, hayvanları ürkütür. 🎯 Sapan sessiz ve seri ama hedef alanı küçük.<br>Saklanan hayvan vurulamaz, kafasını çıkarmasını bekle!</small>
 </div></div>
 
@@ -874,11 +879,26 @@ addEventListener('keydown', e => {
 });
 $('reloadBtn').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); reload(); });
 $('wpBtn').addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); if (playing) setWeapon(weapon === 'rifle' ? 'sling' : 'rifle'); });
+// Tam ekran: Android/masaüstü tarayıcılar API ile adres çubuğunu gizler. iPhone bunu desteklemez;
+// orada "Ana Ekrana Ekle" ile açılan uygulama (manifest) tam ekran olur.
+const rootEl = document.documentElement;
+const canFS = !!(rootEl.requestFullscreen || rootEl.webkitRequestFullscreen);
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const standalone = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone;
+function enterFullscreen() {
+  if (!canFS) return;
+  try {
+    const p = (rootEl.requestFullscreen || rootEl.webkitRequestFullscreen).call(rootEl, { navigationUI: 'hide' });
+    const lock = () => { try { screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {}); } catch (e) {} };
+    if (p && p.then) p.then(lock, () => {}); else lock();
+  } catch (e) {}
+}
 $('fsBtn').addEventListener('click', () => {
-  const d = document.documentElement;
-  if (!document.fullscreenElement) (d.requestFullscreen || d.webkitRequestFullscreen || (() => {})).call(d);
-  else document.exitFullscreen && document.exitFullscreen();
+  if (!canFS) return;
+  if (!document.fullscreenElement && !document.webkitFullscreenElement) enterFullscreen();
+  else (document.exitFullscreen || document.webkitExitFullscreen).call(document);
 });
+if (isIOS && !standalone) $('iosHint').classList.remove('hidden');
 setInterval(() => {
   if (Math.abs(aim.x - aimSent.x) + Math.abs(aim.y - aimSent.y) > 2) { aimSent = { ...aim }; send({ t: 'aim', x: Math.round(aim.x), y: Math.round(aim.y) }); }
 }, 100);
@@ -936,8 +956,8 @@ $('go').addEventListener('click', () => {
   history.replaceState(null, '', `?room=${encodeURIComponent(wantRoom)}`);
   $('lobby').classList.add('hidden');
   playing = true;
-  if (isTouch) { $('reloadBtn').classList.remove('hidden'); $('fsBtn').classList.remove('hidden'); }
-  else $('reloadBtn').classList.remove('hidden');
+  $('reloadBtn').classList.remove('hidden');
+  if (isTouch && canFS) { $('fsBtn').classList.remove('hidden'); enterFullscreen(); }   // "AVA BAŞLA" dokunuşu tam ekran izni verir
   resize(); connect();
 });
 $('share').addEventListener('click', () => {
