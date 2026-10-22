@@ -1,4 +1,4 @@
-// Tavuk Avı Online - oyun sunucusu
+// Avcı Toynaklar - oyun sunucusu
 // Çalıştırma: npm install && npm start  ->  http://localhost:3000
 const http = require('http');
 const fs = require('fs');

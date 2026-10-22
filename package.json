@@ -1,7 +1,7 @@
 {
-  "name": "tavuk-avi-online",
+  "name": "avci-toynaklar",
   "version": "1.0.0",
-  "description": "Çok oyunculu tarayıcı tabanlı çiftlik tavuk avı oyunu",
+  "description": "Avcı Toynaklar: çok oyunculu tarayıcı tabanlı çiftlik avı oyunu",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
