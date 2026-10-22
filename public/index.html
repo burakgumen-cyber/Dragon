@@ -876,121 +876,136 @@ function drawForeground(now) {
   drawFx(fdt);
 }
 
-// ---------- Silahlar (kamera arkadan bakar; namlu nişan noktasına doğru uzanır) ----------
-let gunB = { x: 0, y: 0 }, gunAng = 0;
-const gLin = (y0, y1, stops) => { const q = ctx.createLinearGradient(0, y0, 0, y1); stops.forEach(([o, c]) => q.addColorStop(o, c)); return q; };
-const gPoly = pts => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); };
+// ---------- Silahlar: avcının gözünden, perspektifli 3B model ----------
+// Göz (0,0,0) noktasında, +z ileri, +x sağ, +y aşağı. Silah sağ alt köşeden nişan noktasına doğru uzanır;
+// nişan değişince model gerçekten döner, uzaklaştıkça küçülür, yan yüzleri görünür.
+const GCX = W / 2, GCY = H * 0.45, GF = 1000;
+const gunCv = document.createElement('canvas'); gunCv.width = W; gunCv.height = H;
+const gg = gunCv.getContext('2d');
+const gMask = gg.createLinearGradient(0, H - 150, 0, H - 470);
+gMask.addColorStop(0, 'rgba(0,0,0,1)'); gMask.addColorStop(1, 'rgba(0,0,0,0.4)');   // yukarıdaki (uzak) kısım saydam: arkadaki hayvanlar görünür
+let gaim = { x: W / 2, y: H / 2 }, gbox = null, muzS = 1, ejectPt = { x: 0, y: 0 };
+const LIGHT = [0.447, -0.744, -0.496];
+
+// nişan yönünden silah ekseni (f), sağ (r) ve yukarı (u) vektörleri
+function gunBasis(ax, ay, kick, origin) {
+  let dx = (ax - GCX) / GF, dy = (ay - GCY) / GF - kick, dz = 1;
+  const n = Math.hypot(dx, dy, dz); const f = [dx / n, dy / n, dz / n];
+  const rl = Math.hypot(f[2], f[0]), r = [f[2] / rl, 0, -f[0] / rl];
+  const u = [-r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1]];
+  return { f, r, u, o: origin, pt: (l, s, up) => [origin[0] + f[0] * l + r[0] * s + u[0] * up, origin[1] + f[1] * l + r[1] * s + u[1] * up, origin[2] + f[2] * l + r[2] * s + u[2] * up] };
+}
+const gShade = (col, br) => `rgb(${Math.min(255, col[0] * br) | 0},${Math.min(255, col[1] * br) | 0},${Math.min(255, col[2] * br) | 0})`;
+function addFace(F, pts, axisMid, col) {
+  let cx = 0, cy = 0, cz = 0; for (const p of pts) { cx += p[0]; cy += p[1]; cz += p[2]; }
+  const k = 1 / pts.length; cx *= k; cy *= k; cz *= k;
+  const a = pts[0], b = pts[1], c = pts[2];
+  let nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const nl = Math.hypot(nx, ny, nz) || 1; nx /= nl; ny /= nl; nz /= nl;
+  if (nx * (cx - axisMid[0]) + ny * (cy - axisMid[1]) + nz * (cz - axisMid[2]) < 0) { nx = -nx; ny = -ny; nz = -nz; }   // dışa baksın
+  if (nx * cx + ny * cy + nz * cz >= 0) return;                                                                        // arkası görünmez
+  const br = 0.5 + 0.5 * Math.max(0, nx * LIGHT[0] + ny * LIGHT[1] + nz * LIGHT[2]);
+  F.push({ pts, z: cz, col: gShade(col, br) });
+}
+// l0..l1 arası prizma; a/b: başlangıç/bitiş kesiti {s,u,rs,ru}; n=4 kutu, n=8 silindir
+function prism(F, B, l0, l1, a, b, n, col, cap) {
+  const ring = (l, p) => { const out = []; for (let k = 0; k < n; k++) { let cs, cu; if (n === 4) { cs = (k === 0 || k === 3) ? -1 : 1; cu = k < 2 ? -1 : 1; } else { const th = (k + 0.5) / n * 6.2832; cs = Math.cos(th); cu = Math.sin(th); } out.push(B.pt(l, p.s + cs * p.rs, p.u + cu * p.ru)); } return out; };
+  const r0 = ring(l0, a), r1 = ring(l1, b), m0 = B.pt(l0, a.s, a.u), m1 = B.pt(l1, b.s, b.u);
+  const mid = [(m0[0] + m1[0]) / 2, (m0[1] + m1[1]) / 2, (m0[2] + m1[2]) / 2];
+  for (let k = 0; k < n; k++) { const j = (k + 1) % n; addFace(F, [r0[k], r0[j], r1[j], r1[k]], mid, col); }
+  if (cap && cap.c1) addFace(F, r1, mid, cap.c1);
+  if (cap && cap.c0) addFace(F, r0, mid, cap.c0);
+}
+const KS = (s, u, rs, ru) => ({ s, u, rs, ru });
+const C = { wood: [138, 90, 48], steel: [91, 97, 104], bar: [58, 62, 68], dark: [26, 28, 32], skin: [224, 176, 140], slv: [59, 90, 63], scope: [38, 41, 46], lens: [60, 134, 176], latex: [217, 138, 67], leather: [90, 58, 34], stone: [150, 152, 148], sling: [150, 104, 62] };
+
+function buildRifle(F, B) {
+  prism(F, B, -300, -60, KS(30, -85, 30, 30), KS(30, -85, 30, 30), 4, C.slv);              // sağ kol
+  prism(F, B, 60, 330, KS(-18, -72, 28, 24), KS(-6, -50, 26, 22), 4, C.slv);               // sol kol
+  prism(F, B, -320, 40, KS(0, -8, 24, 52), KS(0, 0, 24, 36), 4, C.wood);                   // dipçik
+  prism(F, B, -20, 170, KS(0, 0, 26, 30), KS(0, 0, 26, 30), 4, C.steel);                   // gövde
+  prism(F, B, 160, 540, KS(0, -6, 25, 20), KS(0, -6, 18, 14), 4, C.wood);                  // ön tutamak
+  prism(F, B, 150, 1070, KS(0, 8, 13, 13), KS(0, 8, 10, 10), 8, C.bar, { c1: C.dark });    // namlu
+  prism(F, B, 1040, 1075, KS(0, 8, 12, 12), KS(0, 8, 12, 12), 8, C.dark, { c1: [8, 8, 10] });
+  prism(F, B, 1000, 1014, KS(0, 24, 2.5, 10), KS(0, 24, 2.5, 10), 4, C.dark);              // arpacık
+  prism(F, B, 188, 206, KS(0, 28, 14, 6), KS(0, 28, 14, 6), 4, C.dark);                    // gez
+  prism(F, B, 130, 150, KS(0, 34, 8, 10), KS(0, 34, 8, 10), 4, C.steel);                   // dürbün ayakları
+  prism(F, B, 300, 320, KS(0, 34, 8, 10), KS(0, 34, 8, 10), 4, C.steel);
+  prism(F, B, 70, 380, KS(0, 52, 14, 14), KS(0, 52, 14, 14), 8, C.scope);                  // dürbün gövdesi
+  prism(F, B, 360, 470, KS(0, 52, 14, 14), KS(0, 52, 20, 20), 8, C.scope, { c1: C.lens }); // objektif
+  prism(F, B, 30, 80, KS(0, 52, 16, 16), KS(0, 52, 14, 14), 8, C.scope, { c0: C.dark });   // göz mercimeği
+  const bk = (1 - bolt) * 34 * Math.sin(bolt * Math.PI);                                   // kilit kolu atıştan sonra geri gelir
+  prism(F, B, 70 - bk, 82 - bk, KS(26, 6, 4, 4), KS(58, 6, 4, 4), 4, C.steel);
+  prism(F, B, 66 - bk, 86 - bk, KS(66, 6, 9, 9), KS(66, 6, 9, 9), 8, [200, 204, 208]);
+  prism(F, B, 330, 470, KS(0, -28, 34, 20), KS(0, -28, 34, 20), 4, C.skin);                // eller
+  prism(F, B, -50, 60, KS(6, -52, 28, 34), KS(6, -52, 28, 34), 4, C.skin);
+  return { muz: B.pt(1078, 0, 8), eject: B.pt(80, 30, 8) };
+}
+function buildSling(F, B) {
+  const lp = 340 - 320 * pull;                                                             // kese: gergin = geride, bırakılınca çatalın ucunda
+  prism(F, B, -300, -60, KS(-28, -50, 30, 26), KS(-28, -50, 30, 26), 4, C.slv);            // sol kol
+  prism(F, B, -260, 120, KS(0, 0, 19, 19), KS(0, 0, 15, 15), 8, C.sling);                  // sap
+  for (const sg of [-1, 1]) {
+    prism(F, B, 110, 340, KS(sg * 6, 0, 11, 11), KS(sg * 80, 0, 9, 9), 8, C.sling);        // çatal kolu
+    prism(F, B, 330, 350, KS(sg * 80, 0, 13, 13), KS(sg * 80, 0, 13, 13), 8, C.dark);      // deri sargı
+    const w = 3.5 + 3 * (1 - pull);
+    prism(F, B, lp, 340, KS(sg * 5, 0, w, w), KS(sg * 80, 0, w, w), 4, C.latex);           // lastik
+  }
+  prism(F, B, lp - 4, lp + 6, KS(0, 0, 17, 12), KS(0, 0, 17, 12), 4, C.leather);           // kese
+  if (ammo > 0 && pull > 0.55) prism(F, B, lp + 6, lp + 24, KS(0, 0, 10, 10), KS(0, 0, 9, 9), 8, C.stone, { c1: [205, 207, 202] });
+  prism(F, B, lp - 60, lp - 8, KS(0, -4, 22, 18), KS(0, -4, 22, 18), 4, C.skin);          // çeken el
+  prism(F, B, lp - 260, lp - 60, KS(10, -20, 16, 14), KS(10, -20, 16, 14), 4, C.slv);
+  prism(F, B, -70, 50, KS(0, -4, 32, 28), KS(0, -4, 32, 28), 4, C.skin);                   // tutan el
+  return { muz: B.pt(340, 0, 0), eject: B.pt(0, 0, 0) };
+}
 
 function drawWeapon(now) {
   const sl = weapon === 'sling';
-  const B = sl ? { x: W * 0.5 + 250, y: H - 10 } : { x: W * 0.5 + 330, y: H + 60 };
-  // namlu, nişan noktasına yumuşakça döner (görsel); atış her zaman nişangahın tam altına gider
-  let d = Math.atan2(aim.y - B.y, aim.x - B.x) - gunA;
-  while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
-  gunA += d * (1 - Math.exp(-fdt * 26));
+  const k = 1 - Math.exp(-fdt * 24);
+  gaim.x += (aim.x - gaim.x) * k; gaim.y += (aim.y - gaim.y) * k;   // namlu nişana yumuşakça döner (görsel); atış tam nişangahın altına gider
   swap = Math.min(1, swap + fdt * 3.2); bolt = Math.min(1, bolt + fdt * 3); pull = Math.min(1, pull + fdt * 3.4);
-  const sw = 1 - (1 - swap) * (1 - swap), a = gunA - recoil * 0.025;
-  const back = recoil * (sl ? 0 : 30) + (1 - sw) * 230, L = sl ? 375 : 524;
-  ctx.save(); ctx.translate(B.x, B.y); ctx.rotate(a); ctx.translate(-back, 0);
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  if (sl) paintSling(); else paintRifle();
-  ctx.restore();
-  gunB = B; gunAng = a;
-  muz.x = B.x + Math.cos(a) * (L - back); muz.y = B.y + Math.sin(a) * (L - back);
-}
+  const sw = 1 - (1 - swap) * (1 - swap), t = now / 1000;
+  const p0 = sl ? [150, 250, 640] : [190, 300, 700];
+  const origin = [p0[0] + Math.sin(t * 1.3) * 2.5, p0[1] + Math.sin(t * 1.9 + 1) * 2.5 + (1 - sw) * 420, p0[2] - (sl ? 0 : recoil * 46)];   // hafif nefes sallanması
+  const B = gunBasis(gaim.x, gaim.y, recoil * (sl ? 0.01 : 0.05), origin);
+  const F = [], info = sl ? buildSling(F, B) : buildRifle(F, B);
 
-function paintRifle() {
-  // kollar
-  ctx.fillStyle = '#3b5a3f'; gPoly([[-20, 6], [150, 14], [150, 70], [-120, 84]]); ctx.fill();
-  ctx.fillStyle = '#2d4631'; gPoly([[-20, 6], [150, 14], [150, 26], [-20, 18]]); ctx.fill();
-  ctx.fillStyle = '#3b5a3f'; gPoly([[170, 8], [300, 6], [300, 44], [150, 82]]); ctx.fill();
-  // dipçik (ceviz) + damar + lastik pad
-  ctx.fillStyle = gLin(-42, 46, [[0, '#a47243'], [0.5, '#744b28'], [1, '#4a2d16']]);
-  gPoly([[-150, -34], [-60, -42], [70, -32], [130, -24], [130, 26], [50, 34], [-60, 46], [-150, 40]]); ctx.fill();
-  ctx.strokeStyle = '#3a22108c'; ctx.lineWidth = 1.5;
-  for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.moveTo(-140, -26 + i * 11); ctx.bezierCurveTo(-60, -30 + i * 11, 20, -20 + i * 10, 120, -18 + i * 8); ctx.stroke(); }
-  ctx.fillStyle = '#1d1d1f'; rr(-158, -36, 12, 80, 4); ctx.fill();
-  // gövde (kilit) + atış penceresi
-  ctx.fillStyle = gLin(-28, 26, [[0, '#9aa0a6'], [0.35, '#5b6168'], [1, '#26292d']]); rr(90, -28, 150, 54, 6); ctx.fill();
-  ctx.fillStyle = '#ffffff22'; ctx.fillRect(96, -26, 138, 3);
-  ctx.fillStyle = '#15171a'; ctx.fillRect(132, -8, 70, 5);
-  // kilit kolu: atıştan sonra geri gelip öne gider
-  const out = 40 + Math.sin(bolt * Math.PI) * 10, bx = 186 - (1 - bolt) * 34 * Math.sin(bolt * Math.PI);
-  ctx.strokeStyle = '#8c9298'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(bx, 18); ctx.lineTo(bx - 6, out); ctx.stroke();
-  ctx.fillStyle = '#c9ccd0'; ctx.beginPath(); ctx.arc(bx - 7, out + 4, 7, 0, 7); ctx.fill();
-  // ön tutamak + namlu
-  ctx.fillStyle = gLin(-20, 22, [[0, '#9b6a3a'], [1, '#5a3a1e']]); gPoly([[220, -20], [372, -14], [372, 16], [220, 22]]); ctx.fill();
-  ctx.fillStyle = '#1d1d1f'; ctx.fillRect(368, -15, 8, 32);
-  ctx.fillStyle = gLin(-12, 12, [[0, '#7d848b'], [0.4, '#40454b'], [1, '#17191c']]); gPoly([[230, -12], [520, -8], [520, 8], [230, 12]]); ctx.fill();
-  ctx.fillStyle = '#ffffff30'; gPoly([[235, -10], [515, -6.5], [515, -4.5], [235, -8]]); ctx.fill();
-  ctx.fillStyle = '#0b0b0c'; rr(512, -10, 12, 20, 3); ctx.fill();
-  ctx.fillStyle = '#16171a'; gPoly([[496, -8], [506, -8], [504, -17], [498, -17]]); ctx.fill();
-  ctx.fillStyle = '#e9c46a'; ctx.fillRect(500, -17, 2.5, 4);
-  // dürbün
-  ctx.fillStyle = '#17181b'; rr(160, -34, 20, 8, 2); ctx.fill(); rr(250, -34, 20, 8, 2); ctx.fill();
-  ctx.fillStyle = gLin(-54, -26, [[0, '#4a4f56'], [0.4, '#1d1f23'], [1, '#0e0f11']]); rr(120, -52, 180, 24, 9); ctx.fill();
-  gPoly([[296, -58], [338, -63], [338, -17], [296, -22]]); ctx.fill();
-  ctx.strokeStyle = '#6b7077'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(338, -63); ctx.lineTo(338, -17); ctx.stroke();
-  ctx.fillStyle = '#4da3c7bb'; ctx.beginPath(); ctx.ellipse(338, -40, 4, 21, 0, 0, 7); ctx.fill();
-  ctx.fillStyle = '#ffffff99'; ctx.beginPath(); ctx.ellipse(337, -48, 1.6, 7, 0, 0, 7); ctx.fill();
-  ctx.fillStyle = '#101113'; rr(106, -57, 28, 34, 7); ctx.fill();
-  ctx.fillStyle = '#2a2d31'; rr(196, -62, 14, 10, 3); ctx.fill();
-  ctx.fillStyle = '#ffffff22'; ctx.fillRect(134, -49, 160, 3);
-  // eller
-  ctx.fillStyle = '#e0b08c'; ctx.beginPath(); ctx.ellipse(310, 8, 28, 17, 0.05, 0, 7); ctx.fill();
-  ctx.strokeStyle = '#b98a68'; ctx.lineWidth = 2; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(298 + i * 11, -6); ctx.quadraticCurveTo(302 + i * 11, 8, 298 + i * 11, 22); ctx.stroke(); }
-  ctx.fillStyle = '#e0b08c'; ctx.beginPath(); ctx.ellipse(62, 8, 26, 19, 0, 0, 7); ctx.fill();
-  ctx.strokeStyle = '#26292d'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(100, 26); ctx.bezierCurveTo(108, 52, 138, 52, 142, 26); ctx.stroke();
-  // namlu alevi
-  if (flash > 0) {
-    ctx.globalAlpha = flash; ctx.fillStyle = '#ffd166';
-    ctx.beginPath(); for (let i = 0; i < 12; i++) { const r = i % 2 ? 16 : 40 + Math.random() * 26, an = i / 12 * Math.PI * 2; ctx.lineTo(540 + Math.cos(an) * r * 1.4, Math.sin(an) * r * 0.8); } ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(534, 0, 11, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+  F.sort((p, q) => q.z - p.z);
+  if (gbox) gg.clearRect(gbox[0], gbox[1], gbox[2], gbox[3]);
+  let x0 = W, y0 = H, x1 = 0, y1 = 0;
+  for (const fc of F) {
+    let ok = true; const sp = [];
+    for (const [x, y, z] of fc.pts) { if (z < 60) { ok = false; break; } sp.push(GCX + GF * x / z, GCY + GF * y / z); }
+    if (!ok) continue;
+    gg.beginPath(); gg.moveTo(sp[0], sp[1]);
+    for (let i = 2; i < sp.length; i += 2) { gg.lineTo(sp[i], sp[i + 1]); }
+    gg.closePath(); gg.fillStyle = fc.col; gg.fill(); gg.strokeStyle = 'rgba(0,0,0,0.28)'; gg.lineWidth = 1; gg.stroke();
+    for (let i = 0; i < sp.length; i += 2) { if (sp[i] < x0) x0 = sp[i]; if (sp[i] > x1) x1 = sp[i]; if (sp[i + 1] < y0) y0 = sp[i + 1]; if (sp[i + 1] > y1) y1 = sp[i + 1]; }
   }
-}
+  x0 = Math.max(0, Math.floor(x0) - 4); y0 = Math.max(0, Math.floor(y0) - 4); x1 = Math.min(W, Math.ceil(x1) + 4); y1 = Math.min(H, Math.ceil(y1) + 4);
+  if (x1 > x0 && y1 > y0) {
+    gg.globalCompositeOperation = 'destination-in'; gg.fillStyle = gMask; gg.fillRect(x0, y0, x1 - x0, y1 - y0); gg.globalCompositeOperation = 'source-over';
+    ctx.drawImage(gunCv, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+    gbox = [x0, y0, x1 - x0, y1 - y0];
+  } else gbox = null;
 
-function paintSling() {
-  ctx.save(); ctx.scale(1.5, 1.5);
-  const px = 252 - 162 * pull;                   // kese: gergin = geride, bırakılınca çatalın ucunda
-  const tipY = 54, wood = '#7a5230';
-  // sol el kolu
-  ctx.fillStyle = '#3b5a3f'; gPoly([[-30, -20], [-220, -26], [-220, 40], [-30, 24]]); ctx.fill();
-  // sap
-  ctx.fillStyle = gLin(-22, 22, [[0, '#b58656'], [0.5, wood], [1, '#4f321a']]); gPoly([[-160, -20], [112, -13], [112, 13], [-160, 20]]); ctx.fill();
-  ctx.strokeStyle = '#3a22108c'; ctx.lineWidth = 1.3; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(-150, -12 + i * 8); ctx.quadraticCurveTo(-20, -14 + i * 8, 100, -8 + i * 5); ctx.stroke(); }
-  // çatal kolları
-  for (const sg of [-1, 1]) {
-    ctx.strokeStyle = wood; ctx.lineWidth = 17; ctx.beginPath(); ctx.moveTo(100, sg * 6); ctx.quadraticCurveTo(190, sg * 14, 250, sg * tipY); ctx.stroke();
-    ctx.strokeStyle = '#b58656'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(104, sg * 2); ctx.quadraticCurveTo(190, sg * 10, 248, sg * (tipY - 4)); ctx.stroke();
-    ctx.fillStyle = '#2b2b2b'; ctx.beginPath(); ctx.arc(252, sg * tipY, 8, 0, 7); ctx.fill();
+  const m = info.muz, e = info.eject;
+  if (m[2] > 60) { muz.x = GCX + GF * m[0] / m[2]; muz.y = GCY + GF * m[1] / m[2]; muzS = GF / m[2]; }
+  if (e[2] > 60) { ejectPt.x = GCX + GF * e[0] / e[2]; ejectPt.y = GCY + GF * e[1] / e[2]; }
+  if (flash > 0 && !sl) {   // namlu alevi
+    ctx.save(); ctx.translate(muz.x, muz.y); ctx.scale(muzS * 1.3, muzS * 1.3); ctx.globalAlpha = flash; ctx.fillStyle = '#ffd166';
+    ctx.beginPath(); for (let i = 0; i < 12; i++) { const r = i % 2 ? 14 : 36 + Math.random() * 26, an = i / 12 * Math.PI * 2; ctx.lineTo(Math.cos(an) * r, Math.sin(an) * r); } ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 0, 11, 0, 7); ctx.fill(); ctx.restore();
   }
-  // lastikler (gerginken ince, gevşekken kalın ve sarkık)
-  const sag = (1 - pull) * 20;
-  for (const sg of [-1, 1]) {
-    ctx.strokeStyle = '#7a3e18'; ctx.lineWidth = 11 - 4 * pull; ctx.beginPath(); ctx.moveTo(252, sg * tipY); ctx.quadraticCurveTo((252 + px) / 2, sg * (tipY * 0.45 + sag), px, sg * 5); ctx.stroke();
-    ctx.strokeStyle = '#d98a43'; ctx.lineWidth = 7 - 3 * pull; ctx.beginPath(); ctx.moveTo(252, sg * tipY); ctx.quadraticCurveTo((252 + px) / 2, sg * (tipY * 0.45 + sag), px, sg * 5); ctx.stroke();
-  }
-  // kese + taş
-  ctx.fillStyle = '#5a3a22'; ctx.beginPath(); ctx.ellipse(px, 0, 15, 11, 0, 0, 7); ctx.fill();
-  if (ammo > 0 && pull > 0.55) {
-    const g = ctx.createRadialGradient(px + 4, -3, 1, px + 6, 0, 10); g.addColorStop(0, '#e2e2dc'); g.addColorStop(1, '#6f716e');
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px + 6, 0, 9, 0, 7); ctx.fill();
-  }
-  // çeken el (yumruk) ve tutan el
-  ctx.fillStyle = '#e0b08c'; ctx.beginPath(); ctx.ellipse(px - 16, 0, 17, 13, 0, 0, 7); ctx.fill();
-  ctx.strokeStyle = '#b98a68'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(px - 8, -9); ctx.lineTo(px - 8, 9); ctx.moveTo(px - 15, -10); ctx.lineTo(px - 15, 10); ctx.stroke();
-  ctx.fillStyle = '#e0b08c'; ctx.beginPath(); ctx.ellipse(10, 2, 36, 21, 0, 0, 7); ctx.fill();
-  ctx.strokeStyle = '#b98a68'; ctx.lineWidth = 2; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(-6 + i * 16, -14); ctx.quadraticCurveTo(-2 + i * 16, 2, -6 + i * 16, 18); ctx.stroke(); }
-  ctx.restore();
 }
 
 // ---------- Silah efektleri (ön planda) ----------
 function weaponFx() {
+  const ang = Math.atan2(aim.y - muz.y, aim.x - muz.x);
   if (weapon === 'rifle') {
     fparts.push({ k: 'tr', x0: muz.x, y0: muz.y, x1: aim.x, y1: aim.y, life: 0.09, max: 0.09 });
-    for (let i = 0; i < 7; i++) fparts.push({ k: 'sm', x: muz.x, y: muz.y, vx: Math.cos(gunAng) * (30 + Math.random() * 60) + (Math.random() - 0.5) * 40, vy: Math.sin(gunAng) * (30 + Math.random() * 60) - Math.random() * 30, r: 6 + Math.random() * 6, life: 0.9 + Math.random() * 0.5 });
-    const ex = gunB.x + Math.cos(gunAng) * 150 - Math.sin(gunAng) * 34, ey = gunB.y + Math.sin(gunAng) * 150 + Math.cos(gunAng) * 34;
-    fparts.push({ k: 'sh', x: ex, y: ey, vx: -Math.sin(gunAng) * 170 + Math.random() * 40, vy: Math.cos(gunAng) * 170 - 230, rot: 0, life: 1.1 });
+    for (let i = 0; i < 7; i++) fparts.push({ k: 'sm', x: muz.x, y: muz.y, vx: Math.cos(ang) * (30 + Math.random() * 60) + (Math.random() - 0.5) * 40, vy: Math.sin(ang) * (30 + Math.random() * 60) - Math.random() * 30, r: (6 + Math.random() * 6) * muzS, life: 0.9 + Math.random() * 0.5 });
+    fparts.push({ k: 'sh', x: ejectPt.x, y: ejectPt.y, vx: 140 + Math.random() * 70, vy: -230 - Math.random() * 40, rot: 0, life: 1.1 });
   } else {
     fparts.push({ k: 'st', x0: muz.x, y0: muz.y, x1: aim.x, y1: aim.y, life: 0.17, max: 0.17 });
   }
