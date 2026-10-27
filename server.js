@@ -47,9 +47,17 @@ const TYPES = {
   black: { pts: 2, spd: 1.25, r: 32, cy: 28 },
   golden: { pts: 5, spd: 1.9, r: 32, cy: 28 },
   rabbit: { pts: 10, spd: 1.5, r: 28, cy: 18 },
+  fox: { pts: 20, spd: 1, r: 34, cy: 24 },
 };
-const ST = { walk: 0, run: 1, idle: 2, fly: 3, hide: 4, peek: 5, dead: 6, exit: 7, tohide: 8 };
-const TY = { normal: 0, black: 1, golden: 2, rabbit: 3 };
+const ST = { walk: 0, run: 1, idle: 2, fly: 3, hide: 4, peek: 5, dead: 6, exit: 7, tohide: 8, stalk: 9, freeze: 10, pounce: 11, carry: 12 };
+const TY = { normal: 0, black: 1, golden: 2, rabbit: 3, fox: 4 };
+const FOX_RESCUE = 5;       // taşıdığı tavukla yakalanan tilkiyi vurana ek puan
+// Dönme dolap (istemciyle aynı): kabinlerdeki ördekler. Açı yalnızca tick'e bağlı, ağdan gönderilmez.
+const WHEEL = { x: 830, y: 262, R: 122, n: 6 };
+const DUCK = { pts: 3, r: 16, dy: 14 };   // dy: ördek merkezinin kabin askı noktasından aşağıda olması
+const wheelAng = tick => { const t = tick * TICK / 1000; return 0.42 * t + 0.28 * Math.sin(0.9 * t); };   // hızı 0.17-0.67 rad/sn arasında değişir
+const duckPos = (i, tick) => { const a = wheelAng(tick) + i * 2 * Math.PI / WHEEL.n; return [WHEEL.x + WHEEL.R * Math.cos(a), WHEEL.y + WHEEL.R * Math.sin(a) + DUCK.dy]; };
+// ördek durumları: 0 görünür, 1 kabinde eğilmiş, 2 vuruldu (düşüyor), 3 kabin boş
 const COLORS = ['#e63946', '#2a9d8f', '#f4a261', '#4895ef', '#9b5de5', '#00bbf9', '#f15bb5', '#80b918'];
 
 const scale = y => 0.45 + (y - GY0) / (GY1 - GY0) * 0.75;
@@ -67,7 +75,7 @@ function saveScores() {
 // true: bu oyuncunun rekoru yeni ya da yükseldi
 function submitScore(dur, name, score) {
   score = Math.floor(+score);
-  if (!ROUNDS.includes(dur) || !(score > 0) || score > dur * 2.5 + 20) return false;   // makul olmayan puanları yok say
+  if (!ROUNDS.includes(dur) || !(score > 0) || score > dur * 2.5 + 80) return false;   // makul olmayan puanları yok say
   const list = scores[dur] || (scores[dur] = []);
   const ex = list.find(e => e.n === name);
   if (ex && score <= ex.s) return false;
@@ -118,8 +126,12 @@ class Room {
     this.phase = 'play';
     this.timer = this.round;
     this.spawnT = 0;
+    this.foxT = rnd(10, 18);
+    this.ducks = this.newDucks();
     this.iv = setInterval(() => this.step(), TICK);
   }
+
+  newDucks() { return Array.from({ length: WHEEL.n }, (_, i) => ({ st: i % 2, t: rnd(0.5, 4) })); }
 
   send(p, m) { if (p.ws.readyState === 1) p.ws.send(JSON.stringify(m)); }
   broadcast(m) { const s = JSON.stringify(m); for (const p of this.players.values()) if (p.ws.readyState === 1) p.ws.send(s); }
@@ -207,6 +219,8 @@ class Room {
   }
 
   updC(c, dt) {
+    if (c.fearT > 0) c.fearT -= dt;
+    if (c.type === 'fox') return this.updFox(c, dt);
     c.t -= dt;
     const sp = c.spd * (0.55 + 0.45 * scale(c.y));
     switch (c.state) {
@@ -242,11 +256,20 @@ class Room {
     }
   }
 
-  // Atış sesi yakındaki tavukları ürkütür
-  scare(x, y, rad) {
+  // Atış sesi yakındaki tavukları, tilkiyi ve ördekleri ürkütür. byFox: ürküten tilkidir (tilki ve ördeklere etkisi yok)
+  scare(x, y, rad, byFox) {
     for (const c of this.ch) {
       if (c.state === 'dead' || c.state === 'hide' || c.state === 'fly' || c.state === 'tohide') continue;
       const d = Math.hypot(c.x - x, c.y - y);
+      if (c.type === 'fox') {   // tilki ateş edilen yerden uzaklaşır, sığınır ve bir süre temkinli kalır
+        if (!byFox && d < rad + (c.state === 'peek' ? 20 : 0) && c.state !== 'pounce' && c.state !== 'carry') {
+          c.wary = 4;
+          if (c.state === 'peek') { const cv = COVERS[c.cover]; c.state = 'hide'; c.x = cv.x; c.y = cv.y - 8; c.t = rnd(1.5, 3); }
+          else if (!this.foxHide(c)) { const dd = d || 1; c.state = 'run'; this.target(c, clamp(c.x + (c.x - x) / dd * 320, 40, W - 40), clamp(c.y + (c.y - y) / dd * 160, GY0 + 10, GY1 - 10)); }
+        }
+        continue;
+      }
+      if (byFox) { if (c.fearT > 0) continue; c.fearT = 2.5; }   // tilkinin korkuttuğu tavuk 2.5 sn içinde yeniden zar atmaz
       if (c.state === 'peek') {
         if (d < rad + 20) { const cv = COVERS[c.cover]; c.state = 'hide'; c.x = cv.x; c.y = cv.y - 8; c.t = rnd(1.5, 3); }
         continue;
@@ -261,6 +284,164 @@ class Room {
         this.target(c, clamp(c.x + (c.x - x) / dd * 320, 40, W - 40), clamp(c.y + (c.y - y) / dd * 160, GY0 + 10, GY1 - 10));
       }
     }
+    if (!byFox) for (let i = 0; i < this.ducks.length; i++) {   // ördekler kabine eğilir
+      const dk = this.ducks[i];
+      if (dk.st !== 0) continue;
+      const [dx, dy] = duckPos(i, this.tick);
+      if (Math.hypot(dx - x, dy - y) < rad && Math.random() < 0.7) { dk.st = 1; dk.t = rnd(1.6, 3.2); }
+    }
+  }
+
+  // ----- Tilki: kurnaz avcı -----
+  // Stratejileri: siperden siper atlayarak sinsice yaklaşır; nişangah yakındaysa donup taş gibi durur ve küçülür;
+  // yalnızca kimse izlemiyorken (ya da avcılar mermi doldururken) atılır; saklanan tavuğun siperinde pusuya yatar;
+  // yalnız kalmış ve değerli avı seçer; ateş edilince siper arar ve temkinli bekler; kaçarken zikzak çizer;
+  // 3 denemede yakalayamazsa çekilir. Tavuğu kaparsa kaçar: vurulursa tavuk kurtulur (+bonus).
+  watched(x, y, rad) {
+    const now = Date.now();
+    for (const p of this.players.values()) if (p.ammo > 0 && now >= p.reloadUntil && Math.hypot(p.aim.x - x, p.aim.y - y) < rad) return true;
+    return false;
+  }
+  freeCovers(f) { return COVERS.map((_, i) => i).filter(i => !this.ch.some(o => o !== f && o.cover === i && o.state !== 'dead')); }
+
+  spawnFox() {
+    const left = Math.random() < 0.5, y = rnd(GY0 + 60, GY1 - 80);
+    const f = { id: this.nextId++, x: left ? -60 : W + 60, y, z: 0, type: 'fox', state: 'stalk', t: 0, dir: left ? 1 : -1, tx: 0, ty: 0, cover: -1, fly: null, spd: 100, age: 0, think: 2.5, sc: 0, wary: 0, fails: 0, fz: 0, prey: null, cr: null, crType: null };
+    this.target(f, left ? 140 : W - 140, y);
+    this.ch.push(f);
+    this.broadcast({ t: 'ev', k: 'fox', msg: '🦊 Tilki çiftliğe sızdı! Tavuklara dikkat!' });
+  }
+
+  foxPrey(f) {
+    let best = null, bs = 1e9;
+    for (const o of this.ch) {
+      if (o.type === 'fox' || o.gone || o.state === 'dead' || o.state === 'fly' || o.state === 'exit') continue;
+      let s = Math.hypot(o.x - f.x, o.y - f.y) + Math.random() * 60;
+      if (o.state === 'hide') s += 150;                                                        // saklananı pusuda bekler
+      for (const q of this.ch) if (q !== o && q.type !== 'fox' && Math.hypot(q.x - o.x, q.y - o.y) < 130) s += 35;   // kalabalıktan kaçınır
+      if (this.watched(o.x, o.y, 170)) s += 120;
+      s -= o.type === 'golden' ? 140 : o.type === 'rabbit' ? 60 : o.type === 'black' ? 30 : 0;
+      if (s < bs) { bs = s; best = o; }
+    }
+    return best;
+  }
+
+  foxLeave(f) {
+    if (f.cover < 0) return;
+    const cv = COVERS[f.cover]; f.cover = -1;
+    if (f.state === 'hide') { f.x = cv.x + (Math.random() < 0.5 ? -1 : 1) * (cv.w / 2 + 10); f.y = cv.y + 6; }   // siperin arkasından çıkar
+  }
+  foxGoCover(f, i, state) { this.foxLeave(f); f.cover = i; f.state = state; this.target(f, COVERS[i].x, COVERS[i].y - 8); }
+  foxHide(f) {   // en yakın boş sipere koşar
+    const free = this.freeCovers(f), d = k => Math.hypot(COVERS[k].x - f.x, COVERS[k].y - f.y);
+    if (!free.length) return false;
+    free.sort((a, b) => d(a) - d(b)); this.foxGoCover(f, free[0], 'tohide');
+    return true;
+  }
+  foxHold(f, t) {   // olduğu yerde bekler: siperde saklanır, açıkta donar
+    if (f.cover >= 0) { const cv = COVERS[f.cover]; f.state = 'hide'; f.x = cv.x; f.y = cv.y - 8; } else { f.state = 'freeze'; f.fz++; }
+    f.t = t;
+  }
+  foxExit(f) { this.foxLeave(f); f.state = 'exit'; this.target(f, f.x < W / 2 ? -90 : W + 90, f.y); }
+  foxFlee(f) {
+    if (this.foxHide(f)) return;
+    f.state = 'run'; this.target(f, rnd(100, W - 100), rnd(GY0 + 30, GY1 - 30));
+  }
+
+  foxPlan(f) {
+    if (f.age > 55 || f.fails >= 3) return this.foxExit(f);
+    const prey = this.foxPrey(f);
+    if (!prey) {
+      if (f.cover >= 0) this.foxHold(f, rnd(1, 2));
+      else { f.state = 'stalk'; this.target(f, rnd(100, W - 100), rnd(GY0 + 30, GY1 - 30)); }
+      return;
+    }
+    f.prey = prey.id;
+    const d = Math.hypot(prey.x - f.x, prey.y - f.y);
+    if (f.wary > 0 || this.watched(f.x, f.y, 240)) {   // izleniyor: ikinci kez donmaz, siper arar
+      if (f.cover < 0 && f.fz >= 2 && this.foxHide(f)) return;
+      return this.foxHold(f, rnd(0.9, 1.8));
+    }
+    if (prey.state === 'hide' && d < 320) return this.foxHold(f, rnd(0.7, 1.4));   // pusu: tavuk kafasını çıkarınca atılır
+    if (d < 290 && prey.state !== 'hide') { this.foxLeave(f); f.fz = 0; f.state = 'pounce'; f.t = 1.8; return; }
+    // sinsice yaklaşma: avına yakın bir sipere atlar, yoksa düz sürünür
+    const hops = this.freeCovers(f).map(i => ({ i, cd: Math.hypot(COVERS[i].x - prey.x, COVERS[i].y - prey.y) })).filter(o => o.cd > 70 && o.cd < d - 60).sort((a, b) => a.cd - b.cd);
+    if (hops.length && d > 320) return this.foxGoCover(f, hops[0].i, 'stalk');
+    this.foxLeave(f);
+    const k = Math.max(0, d - 230) / (d || 1);
+    f.state = 'stalk'; this.target(f, f.x + (prey.x - f.x) * k, f.y + (prey.y - f.y) * k);
+  }
+
+  foxCatch(f, p) {
+    p.gone = true; f.cr = TY[p.type]; f.crType = p.type; f.state = 'carry';
+    this.target(f, f.x < W / 2 ? -90 : W + 90, clamp(f.y, GY0 + 10, GY1 - 10));
+    this.broadcast({ t: 'ev', k: 'steal', msg: `🦊 Tilki ${p.type === 'rabbit' ? 'tavşanı' : 'bir tavuğu'} kaptı! Vur, kurtar!` });
+  }
+  foxRelease(f) {   // vurulan tilkinin taşıdığı av kurtulur
+    const type = f.crType;
+    const c = { id: this.nextId++, x: f.x, y: f.y, z: 0, type, state: 'run', t: 0, dir: 1, tx: 0, ty: 0, cover: -1, fly: null, spd: rnd(70, 105) * TYPES[type].spd, fearT: 3 };
+    this.target(c, rnd(100, W - 100), rnd(GY0 + 20, GY1 - 10));
+    this.ch.push(c); f.cr = null;
+  }
+
+  foxArrive(f) {
+    if (f.state === 'exit' || f.state === 'carry') { f.gone = true; return; }
+    if ((f.state === 'tohide' || f.state === 'stalk') && f.cover >= 0) { const cv = COVERS[f.cover]; f.state = 'hide'; f.x = cv.x; f.y = cv.y - 8; f.t = rnd(1, 2.4); return; }
+    f.state = 'freeze'; f.t = rnd(0.3, 0.9);
+  }
+
+  updFox(f, dt) {
+    f.age += dt; f.t -= dt; f.think -= dt; f.sc -= dt; f.wary = Math.max(0, f.wary - dt);
+    const k = 0.55 + 0.45 * scale(f.y), base = 105 * k;
+    if ((f.state === 'stalk' || f.state === 'pounce') && f.cover < 0 && f.sc <= 0) { f.sc = 0.5; this.scare(f.x, f.y, f.state === 'pounce' ? 210 : 110, true); }
+    switch (f.state) {
+      case 'dead': f.z = Math.max(0, f.z - 600 * dt); if (f.t <= 0) f.gone = true; break;
+      case 'freeze': if (f.t <= 0) this.foxPlan(f); break;
+      case 'hide':
+        if (f.t <= 0) {
+          if (Math.random() < 0.45) { const cv = COVERS[f.cover], side = Math.random() < 0.5 ? -1 : 1; f.state = 'peek'; f.x = cv.x + side * (cv.w / 2 + 8); f.y = cv.y + 4; f.dir = side; f.t = rnd(0.7, 1.4); }
+          else this.foxPlan(f);
+        }
+        break;
+      case 'peek': if (f.t <= 0) this.foxPlan(f); break;
+      case 'pounce': {
+        const p = this.ch.find(o => o.id === f.prey);
+        if (!p || p.gone || p.state === 'dead' || p.state === 'hide' || p.state === 'fly' || f.t <= 0) { f.fails++; f.wary = 3; this.foxFlee(f); break; }
+        const dx = p.x - f.x, dy = p.y - f.y, d = Math.hypot(dx, dy) || 1;
+        if (d < 30 * k + 12) { this.foxCatch(f, p); break; }
+        const v = Math.min(base * 3.4 * dt, d);
+        f.x += dx / d * v; f.y += dy / d * v; f.dir = dx >= 0 ? 1 : -1;
+        break;
+      }
+      default: {   // stalk, run, tohide, exit, carry
+        if (f.state === 'stalk' && f.cover < 0) {
+          if (this.watched(f.x, f.y, 150)) { f.fz++; f.state = 'freeze'; f.t = rnd(0.9, 1.7); break; }   // nişangah yakında: donar
+          if (f.think <= 0) { f.think = 1; this.foxPlan(f); if (f.state !== 'stalk') break; }
+        }
+        const dx = f.tx - f.x, dy = f.ty - f.y, d = Math.hypot(dx, dy);
+        const v = base * (f.state === 'stalk' ? 0.7 : f.state === 'carry' ? 2.3 : f.state === 'exit' ? 1.6 : 2.4);
+        if (d < v * dt + 1) { f.x = f.tx; f.y = f.ty; this.foxArrive(f); break; }
+        let ux = dx / d, uy = dy / d;
+        if ((f.state === 'carry' || f.state === 'run' || f.state === 'tohide') && d > 70) {   // zikzak: nişan almayı zorlaştırır
+          const a = Math.sin(f.age * 8) * 0.6, cs = Math.cos(a), sn = Math.sin(a);
+          [ux, uy] = [ux * cs - uy * sn, ux * sn + uy * cs];
+        }
+        f.x += ux * v * dt; f.y = clamp(f.y + uy * v * dt, GY0 + 5, GY1 - 5);
+        if (Math.abs(ux) > 0.1) f.dir = ux >= 0 ? 1 : -1;
+      }
+    }
+  }
+
+  // ----- Ördekler (dönme dolap kabinlerinde) -----
+  updDucks(dt) {
+    for (const d of this.ducks) {
+      d.t -= dt;
+      if (d.t > 0) continue;
+      if (d.st === 0) { d.st = 1; d.t = rnd(1.4, 2.8); }          // kabine eğilir
+      else if (d.st === 1) { d.st = 0; d.t = rnd(2.6, 5); }       // başını çıkarır
+      else if (d.st === 2) { d.st = 3; d.t = rnd(7, 12); }        // düştü; kabin bir süre boş
+      else { d.st = 1; d.t = rnd(0.6, 1.4); }                     // yeni ördek kabine biner
+    }
   }
 
   // ----- Atış -----
@@ -274,27 +455,37 @@ class Room {
 
     // gecikme telafisi: oyuncunun ekranda gördüğü tick'e göre kontrol
     const tick = clamp(m.k | 0, this.tick - 20, this.tick);
-    let best = null, bd = 1e9;
+    let best = null, bd = 1e9, bestDuck = -1, dd = 1e9;
     for (const h of this.hist) {
       if (Math.abs(h.tick - tick) > 1) continue;
       for (const [id, s] of h.ch) {
         if (!s.hit) continue;
         const T = TYPES[s.ty] || TYPES.normal, sc = scale(s.y), cx = s.x, cy = s.y - s.z - T.cy * sc;
         const d = Math.hypot(x - cx, y - cy);
-        if (d < Math.max(22, T.r * wp.rm * sc) && d < bd) {   // uzaktaki küçük hayvanlar için en az 22 px isabet alanı
+        if (d < Math.max(22, T.r * wp.rm * sc) * s.hr && d < bd) {   // uzaktaki küçük hayvanlar için en az 22 px isabet alanı; donan tilki küçülür
           const c = this.ch.find(o => o.id === id);
           if (c && c.state !== 'dead' && c.state !== 'hide') { best = c; bd = d; }
         }
       }
+      h.d.forEach((vis, i) => {   // ördekler: küçük ve hareketli hedef
+        if (!vis || this.ducks[i].st > 1) return;
+        const [cx, cy] = duckPos(i, h.tick), d = Math.hypot(x - cx, y - cy);
+        if (d < Math.max(12, DUCK.r * wp.rm) && d < dd) { bestDuck = i; dd = d; }
+      });
     }
-    let hit = null, pts = 0;
-    if (best) {
+    let hit = null, pts = 0, ty = null, rs = 0;
+    if (bestDuck >= 0 && dd < bd) {
+      const dk = this.ducks[bestDuck];
+      dk.st = 2; dk.t = 1.2;
+      pts = DUCK.pts; p.score += pts; p.kills++; hit = 1000 + bestDuck; ty = 'duck';
+    } else if (best) {
       pts = TYPES[best.type].pts + (best.z > 40 ? 1 : 0);
+      if (best.type === 'fox' && best.cr != null) { pts += FOX_RESCUE; rs = 1; this.foxRelease(best); }   // tavuklu tilkiyi vurmak av da kurtarır
       p.score += pts; p.kills++;
       best.state = 'dead'; best.t = 1.2; best.cover = -1;
-      hit = best.id;
+      hit = best.id; ty = best.type;
     }
-    this.broadcast({ t: 'fx', pid: p.id, x: Math.round(x), y: Math.round(y), hit, pts, ty: best ? best.type : null, w: p.weapon });
+    this.broadcast({ t: 'fx', pid: p.id, x: Math.round(x), y: Math.round(y), hit, pts, ty, rs, w: p.weapon });
     this.send(p, { t: 'ammo', a: p.ammo });
     if (hit) this.broadcast({ t: 'b', b: this.board() });
     this.scare(x, y, wp.scare);
@@ -337,22 +528,29 @@ class Room {
       }
       this.spawnT -= dt;
       if (this.spawnT <= 0 && this.ch.filter(c => c.state !== 'dead').length < MAXCH) { this.spawn(); this.spawnT = rnd(0.5, 1.4); }
+      this.foxT -= dt;
+      if (this.foxT <= 0) {   // aynı anda en fazla bir tilki
+        if (!this.ch.some(o => o.type === 'fox') && this.timer > 15 && this.ch.length > 3) this.spawnFox();
+        this.foxT = rnd(25, 40);
+      }
     } else {
       this.timer -= dt;
       if (this.timer <= 0) {
-        this.phase = 'play'; this.timer = this.round; this.ch = [];
+        this.phase = 'play'; this.timer = this.round; this.ch = []; this.foxT = rnd(10, 18); this.ducks = this.newDucks();
         for (const p of this.players.values()) { p.score = 0; p.kills = 0; p.shots = 0; p.ammo = WEAPONS[p.weapon].mag; p.reloadUntil = 0; this.send(p, { t: 'ammo', a: p.ammo, mag: p.ammo }); }
         this.broadcast({ t: 'start', b: this.board() });
       }
     }
     for (const c of this.ch) this.updC(c, dt);
     this.ch = this.ch.filter(c => !c.gone);
+    this.updDucks(dt);
 
-    this.hist.push({ tick: this.tick, ch: new Map(this.ch.map(c => [c.id, { x: c.x, y: c.y, z: c.z, ty: c.type, hit: c.state !== 'hide' && c.state !== 'dead' }])) });
+    this.hist.push({ tick: this.tick, ch: new Map(this.ch.map(c => [c.id, { x: c.x, y: c.y, z: c.z, ty: c.type, hit: c.state !== 'hide' && c.state !== 'dead', hr: c.state === 'freeze' ? 0.6 : c.state === 'stalk' ? 0.8 : 1 }])), d: this.ducks.map(d => d.st === 0) });
     if (this.hist.length > 30) this.hist.shift();
 
     const msg = { t: 's', k: this.tick, tm: Math.ceil(this.timer), ph: this.phase,
-      c: this.ch.map(c => [c.id, Math.round(c.x), Math.round(c.y), Math.round(c.z), ST[c.state], TY[c.type], c.dir]) };
+      c: this.ch.map(c => { const a = [c.id, Math.round(c.x), Math.round(c.y), Math.round(c.z), ST[c.state], TY[c.type], c.dir]; if (c.type === 'fox') a.push(c.cr == null ? -1 : c.cr); return a; }),
+      d: this.ducks.map(d => d.st) };
     if (this.tick % 2 === 0) msg.p = [...this.players.values()].map(p => [p.id, Math.round(p.aim.x), Math.round(p.aim.y)]);
     if (this.tick % 20 === 0) msg.b = this.board();
     this.broadcast(msg);
