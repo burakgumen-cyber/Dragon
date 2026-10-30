@@ -48,9 +48,16 @@ const TYPES = {
   golden: { pts: 5, spd: 1.9, r: 32, cy: 28 },
   rabbit: { pts: 10, spd: 1.5, r: 28, cy: 18 },
   fox: { pts: 20, spd: 1, r: 34, cy: 24 },
+  cow: { pts: -5, spd: 0.4, r: 46, cy: 36 },    // sarı-lacivert inek: vurma, puan düşer
+  dog: { pts: -8, spd: 1.1, r: 30, cy: 20 },    // yeşil köpek: vurma, puan düşer
+  crow: { pts: 10, spd: 1, r: 26, cy: 14 },     // mavi karga: hızlı uçar, 10 puan
 };
+const PREY = new Set(['normal', 'black', 'golden', 'rabbit']);   // tilkinin avı olabilenler
+const CHICK = new Set(['normal', 'black', 'golden']);            // uçarken vurulunca +1 alınanlar
+const SPAWN_GAP = { cow: () => rnd(30, 45), dog: () => rnd(40, 60), crow: () => rnd(9, 16) };
+const MAX_OF = { cow: 1, dog: 1, crow: 2 };
 const ST = { walk: 0, run: 1, idle: 2, fly: 3, hide: 4, peek: 5, dead: 6, exit: 7, tohide: 8, stalk: 9, freeze: 10, pounce: 11, carry: 12 };
-const TY = { normal: 0, black: 1, golden: 2, rabbit: 3, fox: 4 };
+const TY = { normal: 0, black: 1, golden: 2, rabbit: 3, fox: 4, cow: 5, dog: 6, crow: 7 };
 const FOX_RESCUE = 5;       // taşıdığı tavukla yakalanan tilkiyi vurana ek puan
 // Dönme dolap (istemciyle aynı): kabinlerdeki ördekler. Açı yalnızca tick'e bağlı, ağdan gönderilmez.
 const WHEEL = { x: 830, y: 262, R: 122, n: 6 };
@@ -127,9 +134,12 @@ class Room {
     this.timer = this.round;
     this.spawnT = 0;
     this.foxT = rnd(10, 18);
+    this.spT = this.newSpT();
     this.ducks = this.newDucks();
     this.iv = setInterval(() => this.step(), TICK);
   }
+
+  newSpT() { return { cow: rnd(6, 12), dog: rnd(14, 22), crow: rnd(4, 8) }; }   // ilk inek, köpek, karga gelişleri (sn)
 
   newDucks() { return Array.from({ length: WHEEL.n }, (_, i) => ({ st: i % 2, t: rnd(0.5, 4) })); }
 
@@ -204,6 +214,18 @@ class Room {
   }
 
   decide(c) {
+    if (c.type === 'cow') {   // otlar, yavaş dolaşır, bir süre sonra çıkar
+      if (c.age > 40) return this.exit(c);
+      if (Math.random() < 0.6) this.walkRand(c); else { c.state = 'idle'; c.t = rnd(2.5, 5); }
+      return;
+    }
+    if (c.type === 'dog') {   // koşturur, durur, koklar; tilki görürse kovalar (updDog)
+      if (c.age > 30) return this.exit(c);
+      const q = Math.random();
+      if (q < 0.35) this.walkRand(c); else if (q < 0.8) { c.state = 'run'; this.target(c, rnd(80, W - 80), rnd(GY0 + 20, GY1 - 10)); } else { c.state = 'idle'; c.t = rnd(0.8, 2); }
+      return;
+    }
+    if (c.type === 'crow') return this.startFly(c, true);   // yere konan karga yemini gagalayıp uçar gider
     const r = Math.random();
     const flyP = c.type === 'black' ? 0.3 : 0.17;
     if (r < 0.42) this.walkRand(c);
@@ -221,6 +243,8 @@ class Room {
   updC(c, dt) {
     if (c.fearT > 0) c.fearT -= dt;
     if (c.type === 'fox') return this.updFox(c, dt);
+    if (c.age !== undefined) c.age += dt;
+    if (c.type === 'dog' && this.updDog(c, dt)) return;
     c.t -= dt;
     const sp = c.spd * (0.55 + 0.45 * scale(c.y));
     switch (c.state) {
@@ -249,7 +273,8 @@ class Room {
       case 'fly': {
         const f = c.fly; f.p += dt / f.dur; const p = Math.min(1, f.p);
         c.x = f.x0 + (f.x1 - f.x0) * p; c.y = f.y0 + (f.y1 - f.y0) * p; c.z = Math.sin(Math.PI * p) * f.h;
-        if (p >= 1) { c.z = 0; if (f.exit) c.gone = true; else { c.state = 'idle'; c.t = rnd(0.3, 1); } }
+        if (c.type === 'crow') c.z = Math.max(0, c.z + Math.sin(p * 18 + c.id) * 14);   // karga dalgalı uçar: nişan almak zorlaşır
+        if (p >= 1) { c.z = 0; if (f.exit) c.gone = true; else { c.state = 'idle'; c.t = c.type === 'crow' ? rnd(1.5, 3) : rnd(0.3, 1); } }
         break;
       }
       case 'dead': c.z = Math.max(0, c.z - 600 * dt); if (c.t <= 0) c.gone = true; break;
@@ -261,6 +286,8 @@ class Room {
     for (const c of this.ch) {
       if (c.state === 'dead' || c.state === 'hide' || c.state === 'fly' || c.state === 'tohide') continue;
       const d = Math.hypot(c.x - x, c.y - y);
+      if (c.type === 'cow' || c.type === 'dog') continue;   // inek ve köpek ateşten ürkmez
+      if (c.type === 'crow') { if (!byFox && d < rad) this.startFly(c, true); continue; }   // yere konan karga havalanır
       if (c.type === 'fox') {   // tilki ateş edilen yerden uzaklaşır, sığınır ve bir süre temkinli kalır
         if (!byFox && d < rad + (c.state === 'peek' ? 20 : 0) && c.state !== 'pounce' && c.state !== 'carry') {
           c.wary = 4;
@@ -315,10 +342,10 @@ class Room {
   foxPrey(f) {
     let best = null, bs = 1e9;
     for (const o of this.ch) {
-      if (o.type === 'fox' || o.gone || o.state === 'dead' || o.state === 'fly' || o.state === 'exit') continue;
+      if (!PREY.has(o.type) || o.gone || o.state === 'dead' || o.state === 'fly' || o.state === 'exit') continue;
       let s = Math.hypot(o.x - f.x, o.y - f.y) + Math.random() * 60;
       if (o.state === 'hide') s += 150;                                                        // saklananı pusuda bekler
-      for (const q of this.ch) if (q !== o && q.type !== 'fox' && Math.hypot(q.x - o.x, q.y - o.y) < 130) s += 35;   // kalabalıktan kaçınır
+      for (const q of this.ch) if (q !== o && PREY.has(q.type) && Math.hypot(q.x - o.x, q.y - o.y) < 130) s += 35;   // kalabalıktan kaçınır
       if (this.watched(o.x, o.y, 170)) s += 120;
       s -= o.type === 'golden' ? 140 : o.type === 'rabbit' ? 60 : o.type === 'black' ? 30 : 0;
       if (s < bs) { bs = s; best = o; }
@@ -432,6 +459,44 @@ class Room {
     }
   }
 
+  // ----- İnek, köpek, karga -----
+  spawnAnimal(type) {
+    if (type === 'crow') return this.spawnCrow();
+    const sp = SPAWNS[2 + (Math.random() * (SPAWNS.length - 2) | 0)];   // yan kenar girişleri
+    const c = { id: this.nextId++, x: sp.x, y: sp.y, z: 0, type, state: 'walk', t: 0, dir: sp.x < W / 2 ? 1 : -1, tx: 0, ty: 0, cover: -1, fly: null, spd: rnd(70, 105) * TYPES[type].spd, age: 0 };
+    this.target(c, rnd(300, W - 300), rnd(GY0 + 60, GY1 - 40));
+    this.ch.push(c);
+    const cow = type === 'cow';
+    this.broadcast({ t: 'ev', k: type, col: cow ? '#f2c230' : '#6dd36f', msg: cow ? '🐄 Sarı-lacivert inek otlağa geldi! Vurma: -5 puan' : '🐕 Yeşil köpek geldi! Vurma: -8 puan' });
+  }
+  // karga bir kenardan girer, dalgalı uçarak karşı kenara geçer; bazen yere konup yem gagalar
+  spawnCrow() {
+    const left = Math.random() < 0.5, y0 = rnd(GY0 + 20, GY1 - 40), land = Math.random() < 0.25;
+    const x0 = left ? -80 : W + 80;
+    const c = { id: this.nextId++, x: x0, y: y0, z: 0, type: 'crow', state: 'fly', t: 0, dir: left ? 1 : -1, tx: 0, ty: 0, cover: -1, spd: 100 };
+    const x1 = land ? rnd(200, W - 200) : left ? W + 90 : -90, y1 = land ? rnd(GY0 + 60, GY1 - 60) : rnd(GY0 + 10, GY1 - 10);
+    c.fly = { x0, y0, x1, y1, h: rnd(130, 240), p: 0, dur: land ? rnd(2.5, 3.5) : rnd(4.5, 7), exit: !land };
+    c.dir = x1 >= x0 ? 1 : -1;
+    this.ch.push(c);
+  }
+  // köpek tilki görürse kovalar; yakalayınca tilki kaçar. true: bu tick kovalıyor
+  updDog(d, dt) {
+    const fox = this.ch.find(o => o.type === 'fox' && o.state !== 'dead' && o.state !== 'hide' && o.state !== 'carry' && o.state !== 'exit');
+    if (!fox) return false;
+    const dx = fox.x - d.x, dy = fox.y - d.y, dist = Math.hypot(dx, dy);
+    if (dist > 650) return false;
+    if (dist < 110) {
+      fox.wary = 5; fox.fails++;
+      this.foxExit(fox);
+      this.broadcast({ t: 'ev', k: 'dog', col: '#6dd36f', msg: '🐕 Köpek tilkiyi kovaladı!' });
+      return false;
+    }
+    const v = d.spd * (0.55 + 0.45 * scale(d.y)) * 2;
+    d.state = 'run'; d.x += dx / dist * v * dt; d.y = clamp(d.y + dy / dist * v * dt, GY0 + 5, GY1 - 5); d.dir = dx >= 0 ? 1 : -1;
+    d.tx = d.x; d.ty = d.y;
+    return true;
+  }
+
   // ----- Ördekler (dönme dolap kabinlerinde) -----
   updDucks(dt) {
     for (const d of this.ducks) {
@@ -479,9 +544,10 @@ class Room {
       dk.st = 2; dk.t = 1.2;
       pts = DUCK.pts; p.score += pts; p.kills++; hit = 1000 + bestDuck; ty = 'duck';
     } else if (best) {
-      pts = TYPES[best.type].pts + (best.z > 40 ? 1 : 0);
+      pts = TYPES[best.type].pts + (best.z > 40 && CHICK.has(best.type) ? 1 : 0);
       if (best.type === 'fox' && best.cr != null) { pts += FOX_RESCUE; rs = 1; this.foxRelease(best); }   // tavuklu tilkiyi vurmak av da kurtarır
-      p.score += pts; p.kills++;
+      if (pts < 0) p.score = Math.max(0, p.score + pts);   // inek ve köpek: ceza, puan sıfırın altına inmez
+      else { p.score += pts; p.kills++; }
       best.state = 'dead'; best.t = 1.2; best.cover = -1;
       hit = best.id; ty = best.type;
     }
@@ -533,10 +599,16 @@ class Room {
         if (!this.ch.some(o => o.type === 'fox') && this.timer > 15 && this.ch.length > 3) this.spawnFox();
         this.foxT = rnd(25, 40);
       }
+      for (const k of ['cow', 'dog', 'crow']) {   // inek, köpek en fazla 1, karga en fazla 2
+        this.spT[k] -= dt;
+        if (this.spT[k] > 0) continue;
+        if (this.timer > 8 && this.ch.filter(o => o.type === k && o.state !== 'dead').length < MAX_OF[k]) this.spawnAnimal(k);
+        this.spT[k] = SPAWN_GAP[k]();
+      }
     } else {
       this.timer -= dt;
       if (this.timer <= 0) {
-        this.phase = 'play'; this.timer = this.round; this.ch = []; this.foxT = rnd(10, 18); this.ducks = this.newDucks();
+        this.phase = 'play'; this.timer = this.round; this.ch = []; this.foxT = rnd(10, 18); this.spT = this.newSpT(); this.ducks = this.newDucks();
         for (const p of this.players.values()) { p.score = 0; p.kills = 0; p.shots = 0; p.ammo = WEAPONS[p.weapon].mag; p.reloadUntil = 0; this.send(p, { t: 'ammo', a: p.ammo, mag: p.ammo }); }
         this.broadcast({ t: 'start', b: this.board() });
       }

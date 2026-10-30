@@ -119,7 +119,8 @@ const COVERS = [
   { x: 250, y: 525, w: 110, h: 72, type: 'hay' },
 ];
 const STN = ['walk', 'run', 'idle', 'fly', 'hide', 'peek', 'dead', 'exit', 'tohide', 'stalk', 'freeze', 'pounce', 'carry'];
-const TYN = ['normal', 'black', 'golden', 'rabbit', 'fox'];
+const TYN = ['normal', 'black', 'golden', 'rabbit', 'fox', 'cow', 'dog', 'crow'];
+const CHICK = ['normal', 'black', 'golden'];
 // Dönme dolap (sunucuyla aynı): açı yalnızca tick'e bağlıdır
 const WHEEL = { x: 830, y: 262, R: 122, n: 6 };
 const DUCK_DY = 14;
@@ -348,6 +349,27 @@ function sfxQuack(vol = 0.1, p = 0, hurt = false) {   // ördek "vak vak"; vurul
   if (!ac) return;
   const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.12, n = hurt ? 2 : 1 + (Math.random() * 2 | 0);
   for (let i = 0; i < n; i++) voc(t + i * 0.2, (hurt ? 560 : 440) * f, (hurt ? 820 : 300) * f, hurt ? 0.22 : 0.15, vol, p, 1100, { rasp: 0.5, vib: hurt ? 26 : 0, vd: 0.05 });
+}
+function sfxMoo(vol = 0.2, p = 0, hurt = false) {     // inek "möö": alçak, uzun, hafif titrek
+  if (!ac) return;
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.08;
+  voc(t, 150 * f, hurt ? 130 * f : 105 * f, hurt ? 0.5 : 0.9, vol, p, 420, { vib: 5, vd: 0.04, rasp: 0.25 });
+}
+function sfxBark(vol = 0.18, p = 0) {                 // köpek "hav hav"
+  if (!ac) return;
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.1;
+  for (let i = 0; i < 2; i++) voc(t + i * 0.22, 420 * f, 210 * f, 0.12, vol, p, 850, { rasp: 0.6 });
+}
+function sfxDogYelp(vol = 0.3, p = 0) {               // vurulan köpek: "kaying!"
+  if (!ac) return;
+  const t = ac.currentTime;
+  voc(t, 600, 1400, 0.1, vol, p, 1500, { rasp: 0.3 });
+  voc(t + 0.1, 1400, 500, 0.3, vol, p, 1300, { vib: 20, vd: 0.05, rasp: 0.3 });
+}
+function sfxCaw(vol = 0.15, p = 0, hurt = false) {    // karga "gaak gaak"
+  if (!ac) return;
+  const t = ac.currentTime, f = 1 + (Math.random() - 0.5) * 0.1, n = hurt ? 2 : 2 + (Math.random() * 2 | 0);
+  for (let i = 0; i < n; i++) voc(t + i * 0.26, (hurt ? 780 : 600) * f, 380 * f, 0.22, vol, p, 1250, { rasp: 0.75 });
 }
 function sfxFoxYip(vol = 0.15, p = 0) {               // tilki geldi: keskin "yip-yiiip"
   if (!ac) return;
@@ -683,6 +705,9 @@ const PAL = {
 function drawChicken(c, now) {
   if (c.ty === 'rabbit') return drawRabbit(c, now);
   if (c.ty === 'fox') return drawFox(c, now);
+  if (c.ty === 'cow') return drawCow(c, now);
+  if (c.ty === 'dog') return drawDog(c, now);
+  if (c.ty === 'crow') return drawCrow(c, now);
   const s = scale(c.y), dead = c.st === 'dead', flying = c.st === 'fly' || c.z > 4;
   const ph = now / 70 + c.id * 1.7, moving = ['walk', 'run', 'exit', 'tohide'].includes(c.st);
   const [body, shade, hi] = PAL[c.ty];
@@ -824,6 +849,77 @@ function drawFox(c, now) {
   ctx.restore();
 }
 
+// ---------- İnek (sarı-lacivert): vurma, puan düşer ----------
+function drawCow(c, now) {
+  const s = scale(c.y) * 1.15, dead = c.st === 'dead', graze = c.st === 'idle', moving = c.st === 'walk' || c.st === 'exit';
+  const ph = now / 260 + c.id, sw = moving ? Math.sin(ph) * 6 : 0, Y = '#f2c230', N = '#1b2a6b';
+  ctx.save(); ctx.translate(c.x, c.y - c.z); ctx.scale(s * c.dir, s);
+  if (dead) { ctx.globalAlpha = Math.max(0, c.fade); ctx.translate(0, -34); ctx.rotate(Math.PI); ctx.translate(0, 34); }
+  for (const [lx, sg] of [[-30, 1], [-17, -1], [17, 1], [30, -1]]) { ctx.fillStyle = N; ctx.fillRect(lx - 4 + sg * sw * 0.4, -30, 8, 26); ctx.fillStyle = '#15151c'; ctx.fillRect(lx - 4.5 + sg * sw * 0.4, -5, 9, 5); }
+  ctx.strokeStyle = N; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-40, -54); ctx.quadraticCurveTo(-52, -40 + Math.sin(now / 300 + c.id) * 4, -47, -24); ctx.stroke();
+  ctx.fillStyle = N; ctx.beginPath(); ctx.ellipse(-47, -22, 4, 6, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = Y; rr(-42, -68, 84, 42, 17); ctx.fill();
+  ctx.fillStyle = N;
+  for (const [px, py, rx, ry] of [[-20, -55, 14, 9], [4, -45, 11, 8], [26, -60, 9, 7], [-4, -64, 7, 4]]) { ctx.beginPath(); ctx.ellipse(px, py, rx, ry, 0.3, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#f3a6b0'; ctx.beginPath(); ctx.ellipse(-8, -26, 8, 5, 0, 0, 7); ctx.fill();
+  const hx = 52, hy = graze ? -16 + Math.sin(now / 400 + c.id) * 1.5 : -54 + (moving ? Math.sin(ph * 2) * 1.5 : 0);
+  ctx.fillStyle = Y; ctx.beginPath(); ctx.moveTo(32, -68); ctx.lineTo(hx + 2, hy - 13); ctx.lineTo(hx + 8, hy + 12); ctx.lineTo(30, -34); ctx.fill();
+  ctx.fillStyle = Y; rr(hx - 10, hy - 13, 28, 26, 9); ctx.fill();
+  ctx.fillStyle = N; rr(hx + 5, hy - 1, 15, 14, 6); ctx.fill();
+  ctx.fillStyle = '#ffffff55'; ctx.beginPath(); ctx.arc(hx + 11, hy + 6, 1.6, 0, 7); ctx.arc(hx + 16, hy + 6, 1.6, 0, 7); ctx.fill();
+  ctx.fillStyle = '#f6efd8'; ctx.beginPath(); ctx.moveTo(hx - 6, hy - 12); ctx.lineTo(hx - 9, hy - 22); ctx.lineTo(hx - 1, hy - 13); ctx.moveTo(hx + 6, hy - 13); ctx.lineTo(hx + 9, hy - 22); ctx.lineTo(hx + 12, hy - 11); ctx.fill();
+  ctx.fillStyle = N; ctx.beginPath(); ctx.ellipse(hx - 9, hy - 7, 4, 8, 0.6, 0, 7); ctx.fill();
+  if (dead) { ctx.strokeStyle = '#000'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(hx, hy - 8); ctx.lineTo(hx + 6, hy - 2); ctx.moveTo(hx + 6, hy - 8); ctx.lineTo(hx, hy - 2); ctx.stroke(); }
+  else { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(hx + 3, hy - 5, 3, 0, 7); ctx.fill(); ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(hx + 4, hy - 5, 1.7, 0, 7); ctx.fill(); }
+  ctx.restore();
+}
+
+// ---------- Köpek (yeşil): vurma, puan düşer ----------
+function drawDog(c, now) {
+  const s = scale(c.y) * 0.95, dead = c.st === 'dead', run = c.st === 'run' || c.st === 'exit', walk = c.st === 'walk';
+  const ph = now / 70 + c.id * 1.3, bob = run ? Math.abs(Math.sin(ph * 1.4)) * 5 : 0, G = '#3fae4c', D = '#1f7a2e', L = '#8fe08f';
+  ctx.save(); ctx.translate(c.x, c.y - c.z - bob * s); ctx.scale(s * c.dir, s);
+  if (dead) { ctx.globalAlpha = Math.max(0, c.fade); ctx.translate(0, -22); ctx.rotate(Math.PI); ctx.translate(0, 22); }
+  const a = run ? Math.sin(ph * 1.4) * 11 : walk ? Math.sin(ph * 0.7) * 6 : 0;
+  ctx.strokeStyle = D; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-16, -22); ctx.lineTo(-16 + a, 0); ctx.moveTo(-8, -22); ctx.lineTo(-8 - a, 0); ctx.moveTo(14, -22); ctx.lineTo(14 - a, 0); ctx.moveTo(22, -22); ctx.lineTo(22 + a, 0); ctx.stroke();
+  ctx.strokeStyle = G; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(-24, -34); ctx.lineTo(-38, -48 + Math.sin(now / 60 + c.id) * 5); ctx.stroke();
+  ctx.fillStyle = G; ctx.beginPath(); ctx.ellipse(0, -32, 26, 13, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = L; ctx.beginPath(); ctx.ellipse(4, -26, 15, 5, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = D; ctx.beginPath(); ctx.ellipse(-8, -38, 9, 6, 0.2, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#d33a3a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(21, -42); ctx.lineTo(24, -25); ctx.stroke();
+  const hx = 33, hy = -46;
+  ctx.fillStyle = G; ctx.beginPath(); ctx.arc(hx, hy, 11, 0, 7); ctx.fill();
+  ctx.fillStyle = L; ctx.beginPath(); ctx.ellipse(hx + 11, hy + 3, 9, 6, 0.1, 0, 7); ctx.fill();
+  ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(hx + 19, hy + 1, 3, 0, 7); ctx.fill();
+  ctx.fillStyle = D; ctx.beginPath(); ctx.ellipse(hx - 5, hy - 2, 5, 10, 0.35 + (run ? Math.sin(ph * 1.4) * 0.15 : 0), 0, 7); ctx.fill();
+  if (run && !dead) { ctx.fillStyle = '#f2788c'; ctx.beginPath(); ctx.ellipse(hx + 12, hy + 10 + Math.sin(ph * 2) * 1.5, 3, 5.5, 0, 0, 7); ctx.fill(); }
+  if (dead) { ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(hx + 3, hy - 6); ctx.lineTo(hx + 9, hy); ctx.moveTo(hx + 9, hy - 6); ctx.lineTo(hx + 3, hy); ctx.stroke(); }
+  else { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(hx + 6, hy - 3, 2.8, 0, 7); ctx.fill(); ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(hx + 7, hy - 3, 1.6, 0, 7); ctx.fill(); }
+  ctx.restore();
+}
+
+// ---------- Karga (mavi): 10 puan, hızlı uçar ----------
+function drawCrow(c, now) {
+  const s = scale(c.y) * 1.15, dead = c.st === 'dead', flying = c.st === 'fly' || c.z > 4, B = '#2b5fd9', D = '#17398f', Lt = '#7aa6ff';
+  ctx.save(); ctx.translate(c.x, c.y - c.z); ctx.scale(s * c.dir, s);
+  if (dead) { ctx.globalAlpha = Math.max(0, c.fade); ctx.translate(0, -14); ctx.rotate(Math.PI); ctx.translate(0, 14); }
+  if (!flying || dead) { ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-3, -8); ctx.lineTo(-3, 0); ctx.lineTo(1, 0); ctx.moveTo(3, -8); ctx.lineTo(3, 0); ctx.lineTo(7, 0); ctx.stroke(); }
+  const f = Math.sin(now / 45 + c.id) * 0.95;
+  if (flying && !dead) { ctx.save(); ctx.translate(-2, -18); ctx.rotate(-0.5 - f * 0.55); ctx.fillStyle = Lt; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-6, -26); ctx.lineTo(-17, -20); ctx.lineTo(-20, -4); ctx.closePath(); ctx.fill(); ctx.restore(); }
+  ctx.fillStyle = D; ctx.beginPath(); ctx.moveTo(-13, -15); ctx.lineTo(-31, -11); ctx.lineTo(-28, -19); ctx.lineTo(-30, -9); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = B; ctx.beginPath(); ctx.ellipse(0, -14, 15, 8, flying ? -0.2 : -0.1, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(13, -20, 6.5, 0, 7); ctx.fill();
+  ctx.fillStyle = '#1c1c22'; ctx.beginPath(); ctx.moveTo(18, -23); ctx.lineTo(29, -19); ctx.lineTo(18, -16); ctx.closePath(); ctx.fill();
+  if (dead) { ctx.strokeStyle = '#000'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.moveTo(13, -24); ctx.lineTo(17, -20); ctx.moveTo(17, -24); ctx.lineTo(13, -20); ctx.stroke(); }
+  else { ctx.fillStyle = '#ffe9a0'; ctx.beginPath(); ctx.arc(15, -22, 1.8, 0, 7); ctx.fill(); ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(15.5, -22, 0.9, 0, 7); ctx.fill(); }
+  ctx.fillStyle = D;
+  if (flying && !dead) { ctx.save(); ctx.translate(-2, -18); ctx.rotate(-0.3 + f); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-6, -30); ctx.lineTo(-18, -24); ctx.lineTo(-22, -5); ctx.closePath(); ctx.fill(); ctx.restore(); }
+  else { ctx.beginPath(); ctx.ellipse(-3, -14, 11, 5.5, 0.2, 0, 7); ctx.fill(); }
+  ctx.restore();
+}
+
 // ---------- Ördek çizimi (dönme dolap kabininde) ----------
 function drawDuck(x, y, dir, now, id, rot = 0, alpha = 1) {
   const bob = Math.sin(now / 260 + id) * 1.2;
@@ -946,7 +1042,12 @@ function onMsg(m) {
       if (m.r) { reloadEnd = performance.now() + m.r; reloadDur = m.r; if (m.r > 600) sfxReload(weapon); }
       drawAmmo(); break;
     case 'fx': onFx(m); break;
-    case 'ev': if (playing) { feed(m.msg, m.k === 'fox' ? '#ff9a3c' : '#ff6b6b'); sfxFoxYip(0.18, 0); } break;
+    case 'ev':
+      if (playing) {
+        feed(m.msg, m.col || (m.k === 'fox' ? '#ff9a3c' : '#ff6b6b'));
+        if (m.k === 'cow') sfxMoo(0.22, 0); else if (m.k === 'dog') sfxBark(0.2, 0); else sfxFoxYip(0.18, 0);
+      }
+      break;
     case 'end': showEnd(m.b, m.tm, m); break;
     case 'start': $('end').classList.add('hidden'); setBoard(m.b); feed('🔔 Yeni tur başladı!'); break;
   }
@@ -959,13 +1060,16 @@ function onFx(m) {
   const pn = Math.max(-1, Math.min(1, (m.x / W - 0.5) * 1.4));
   // silah sesi yalnızca atan oyuncuya çalar (fire() içinde); başkalarının atışı duyulmaz. Hayvan sesleri herkese çalar.
   if (m.hit) {
-    const duck = m.ty === 'duck', fox = m.ty === 'fox', c = duck ? null : lastChickens.get(m.hit), rab = m.ty === 'rabbit';
-    const px = c ? c.x : m.x, py = c ? c.y - c.z - (rab ? 18 : fox ? 24 : 28) * scale(c.y) : m.y;
-    const fc = m.ty === 'golden' ? '#ffd23f' : m.ty === 'black' ? '#2e2e33' : rab ? '#c9b08e' : fox ? '#e8742a' : duck ? '#6b4a2c' : '#ffffff';
-    for (let i = 0; i < (rab || fox ? 22 : 18); i++) parts.push({ k: 'f', x: px, y: py, vx: (Math.random() - 0.5) * 260, vy: (Math.random() - 0.8) * 220, life: 1.6, rot: Math.random() * 6, col: duck && i % 3 === 0 ? '#2f8f4e' : fc });
-    parts.push({ k: 't', x: px, y: py - 30, vy: -60, life: rab || fox ? 1.8 : 1.3, txt: `+${m.pts}`, col });
-    if (rab) sfxSqueak(mine ? 0.3 : 0.15, pn); else if (fox) sfxFoxYelp(mine ? 0.4 : 0.25, pn); else if (duck) sfxQuack(mine ? 0.3 : 0.18, pn, true); else sfxGidak(mine ? 0.4 : 0.28, pn);
-    if (pl) feed(`${pl.n} ${fox ? '🦊 TİLKİ' : duck ? '🦆 ÖRDEK' : rab ? '🐇 TAVŞAN' : m.ty === 'golden' ? '✨ ALTIN tavuk' : m.ty === 'black' ? '🐓 siyah tavuk' : '🐔 tavuk'} vurdu +${m.pts}${m.rs ? ' (av kurtarıldı!)' : ''}`, col);
+    const duck = m.ty === 'duck', fox = m.ty === 'fox', cow = m.ty === 'cow', dog = m.ty === 'dog', crow = m.ty === 'crow', bad = m.pts < 0;
+    const c = duck ? null : lastChickens.get(m.hit), rab = m.ty === 'rabbit';
+    const cyOf = { rabbit: 18, fox: 24, cow: 36, dog: 20, crow: 14 }[m.ty] || 28;
+    const px = c ? c.x : m.x, py = c ? c.y - c.z - cyOf * scale(c.y) : m.y;
+    const fc = { golden: '#ffd23f', black: '#2e2e33', rabbit: '#c9b08e', fox: '#e8742a', duck: '#6b4a2c', cow: '#f2c230', dog: '#3fae4c', crow: '#2b5fd9' }[m.ty] || '#ffffff';
+    for (let i = 0; i < (rab || fox || cow ? 22 : 18); i++) parts.push({ k: 'f', x: px, y: py, vx: (Math.random() - 0.5) * 260, vy: (Math.random() - 0.8) * 220, life: 1.6, rot: Math.random() * 6, col: duck && i % 3 === 0 ? '#2f8f4e' : cow && i % 2 ? '#1b2a6b' : fc });
+    parts.push({ k: 't', x: px, y: py - 30, vy: -60, life: rab || fox || bad ? 1.8 : 1.3, txt: bad ? `${m.pts}` : `+${m.pts}`, col: bad ? '#ff4d4d' : col });
+    if (rab) sfxSqueak(mine ? 0.3 : 0.15, pn); else if (fox) sfxFoxYelp(mine ? 0.4 : 0.25, pn); else if (duck) sfxQuack(mine ? 0.3 : 0.18, pn, true);
+    else if (cow) sfxMoo(mine ? 0.4 : 0.25, pn, true); else if (dog) sfxDogYelp(mine ? 0.35 : 0.22, pn); else if (crow) sfxCaw(mine ? 0.3 : 0.18, pn, true); else sfxGidak(mine ? 0.4 : 0.28, pn);
+    if (pl) feed(`${pl.n} ${fox ? '🦊 TİLKİ' : duck ? '🦆 ÖRDEK' : crow ? '🐦 KARGA' : cow ? '🐄 İNEK' : dog ? '🐕 KÖPEK' : rab ? '🐇 TAVŞAN' : m.ty === 'golden' ? '✨ ALTIN tavuk' : m.ty === 'black' ? '🐓 siyah tavuk' : '🐔 tavuk'} vurdu ${bad ? `${m.pts} (hata!)` : `+${m.pts}`}${m.rs ? ' (av kurtarıldı!)' : ''}`, bad ? '#ff4d4d' : col);
   } else {
     for (let i = 0; i < 8; i++) parts.push({ k: 'd', x: m.x, y: m.y, vx: (Math.random() - 0.5) * 80, vy: -Math.random() * 60, life: 0.7, r: 4 + Math.random() * 6 });
   }
@@ -1403,7 +1507,9 @@ function frame(now) {
     nowMap.set(c.id, c);
     const pn = Math.max(-1, Math.min(1, (c.x / W - 0.5) * 1.6)), vs = 0.45 + scale(c.y) * 0.7;
     // ürken tavuk havalanırken çığlık atar
-    if (ac && playing && prev && prev.st !== 'fly' && c.st === 'fly' && c.ty !== 'rabbit' && now > nextPanic && Math.random() < 0.6) { nextPanic = now + 250; sfxPanic(0.06 * vs, pn); }
+    if (ac && playing && prev && prev.st !== 'fly' && c.st === 'fly' && CHICK.includes(c.ty) && now > nextPanic && Math.random() < 0.6) { nextPanic = now + 250; sfxPanic(0.06 * vs, pn); }
+    // karga ekrana girerken "gaak" der
+    if (ac && playing && c.ty === 'crow' && c.x > 0 && c.x < W && !hopT.has('c' + c.id)) { hopT.set('c' + c.id, 1); sfxCaw(0.08 * vs, pn); }
     // tilki atılırken kısa bir "yip" çıkarır
     if (ac && playing && c.ty === 'fox' && prev && prev.st !== 'pounce' && c.st === 'pounce') sfxFoxYip(0.09 * vs, pn);
     // tavşan koşarken yumuşak zıplama sesi
@@ -1415,7 +1521,11 @@ function frame(now) {
     nextCluck = now + 700 + Math.random() * 2300;
     const vis = []; ds.forEach((st, i) => { if (st === 0) vis.push(i); });
     if (vis.length && Math.random() < 0.25) sfxQuack(0.05, (wheelPt(vis[Math.random() * vis.length | 0], rt)[0] / W - 0.5) * 1.6);   // dönme dolaptan "vak vak"
-    const cand = chs.filter(c => c.ty !== 'rabbit' && c.ty !== 'fox' && c.st !== 'dead' && c.st !== 'hide' && c.x > 0 && c.x < W);
+    for (const [ty, snd, vl] of [['cow', sfxMoo, 0.09], ['dog', sfxBark, 0.08]]) {   // inek ve köpek arada ses verir
+      const an = chs.find(c => c.ty === ty && c.st !== 'dead' && c.x > 0 && c.x < W);
+      if (an && Math.random() < 0.14) snd(vl, (an.x / W - 0.5) * 1.6);
+    }
+    const cand = chs.filter(c => CHICK.includes(c.ty) && c.st !== 'dead' && c.st !== 'hide' && c.x > 0 && c.x < W);
     if (cand.length) {
       const c = cand[Math.random() * cand.length | 0], pn = (c.x / W - 0.5) * 1.6, v = 0.15 * (0.5 + scale(c.y) * 0.7), r = Math.random();
       if (c.ty === 'black' && r < 0.25) sfxHoroz(v * 0.9, pn);         // siyah tavuklar horoz gibi öter
@@ -1430,7 +1540,7 @@ function frame(now) {
   for (const c of chs) {
     if (c.st === 'hide') continue;
     const s = scale(c.y); ctx.fillStyle = `rgba(0,0,0,${0.22 * Math.max(0.3, 1 - c.z / 300)})`;
-    ctx.beginPath(); ctx.ellipse(c.x, c.y, 20 * s * (1 - c.z / 600), 6 * s, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(c.x, c.y, (c.ty === 'cow' ? 46 : c.ty === 'fox' ? 28 : c.ty === 'dog' ? 24 : 20) * s * (1 - c.z / 600), 6 * s, 0, 0, 7); ctx.fill();
   }
   // derinlik sıralaması: siperler + yerdeki tavuklar
   const items = COVERS.map(c => ({ y: c.y, cover: c }));

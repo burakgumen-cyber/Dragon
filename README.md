@@ -28,7 +28,10 @@ Tarayıcıda (PC + mobil) oynanan, çok oyunculu çiftlik avı oyunu. Gümen Toy
   - Silahlar avcının gözünden perspektifli çizilir; nişan noktasına göre döner ve uzaklaştıkça küçülür.
 - **Kontroller:** PC: fareyle nişan, sol tık ateş, sağ tık / R / boşluk = doldur. Mobil: dokunduğun yere ateş, "Doldur" düğmesi.
 - **Hayvanlar:** Tavuklar ahırdan, kümesten ve tarla kenarlarından çıkar; yürür, yem gagalar, ürkünce kaçar, uçar, saman balyası / çalı / kuyu / araba arkasına saklanır ve kafasını çıkarır. Saklanırken vurulamaz. Tavuklar arada "bok bok" ve "glu glu" sesleri çıkarır.
-- **Puan:** beyaz tavuk 1, siyah 2, altın 5, 🐇 tavşan 10 (ekranda aynı anda en fazla bir tane, uçmaz, çok hızlıdır), 🦆 ördek 3, 🦊 tilki 20. Uçarken vurulana +1.
+- **Puan:** beyaz tavuk 1, siyah 2, altın 5, 🐇 tavşan 10 (ekranda aynı anda en fazla bir tane, uçmaz, çok hızlıdır), 🦆 ördek 3, 🐦 mavi karga 10, 🦊 tilki 20. Uçarken vurulan tavuğa +1. **Ceza:** 🐄 sarı-lacivert inek -5, 🐕 yeşil köpek -8 (puan sıfırın altına inmez).
+- **🐦 Karga:** Her 9-16 sn'de bir kenardan girer (aynı anda en fazla 2), dalgalı ve hızlı uçarak karşı kenara geçer. Bazen yere konup yem gagalar; yakında ateş edilirse havalanır.
+- **🐄 İnek:** Her 30-45 sn'de bir gelir (en fazla 1), yavaşça otlanıp dolaşır, ateşten ürkmez. Büyük bir hedef ama vurma.
+- **🐕 Köpek:** Her 40-60 sn'de bir gelir (en fazla 1), koşturur, ateşten ürkmez. Tilki gelirse onu kovalar; yakalarsa tilki çekilir. Vurma.
 - **🦊 Tilki:** Tur başladıktan 10-18 sn sonra, sonra da 25-40 sn arayla (aynı anda en fazla bir tane) kenardan sızar ve tavukları, tavşanı kapmaya çalışır. Kurnazlığı:
   - Siperden siper atlayarak sinsice yaklaşır, saklanan tavuğun yanındaki siperde pusuya yatar.
   - Yalnız kalmış ve değerli (altın, tavşan) avı seçer.
